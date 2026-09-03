@@ -1,0 +1,38 @@
+# ===== Python 运行缓存（自动生成，无需上传）=====
+__pycache__/
+*.pyc
+*.pyo
+
+# ===== 工具数据目录（用户数据：扫描结果 data.json、配置 config.json、日志等）=====
+# v1.2 起就在工具文件夹内（starchart\.starchart\），属于个人数据，不入库
+.starchart/
+
+# ===== 运行时产物（旧版本兼容：早期日志/临时文件曾生成在根目录）=====
+server.log
+server.log.1
+*.tmp
+*.corrupt-*
+*.bak
+
+# ===== Python 虚拟环境与打包产物（本地环境，体积大且因人而异）=====
+venv/
+.venv/
+env/
+build/
+dist/
+*.egg-info/
+
+# ===== 环境变量 / 密钥（防止泄露本地配置）=====
+.env
+
+# ===== 操作系统自动生成的垃圾文件 =====
+# Windows
+Thumbs.db
+Desktop.ini
+# macOS
+.DS_Store
+
+# ===== 编辑器 / IDE 配置（个人设置，无需共享）=====
+.vscode/
+.idea/
+*.swp

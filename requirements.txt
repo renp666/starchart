@@ -1,0 +1,14 @@
+# 星图 StarChart 依赖
+#
+# Python 版本要求：3.7 及以上
+#   用到 ThreadingHTTPServer、subprocess.run(capture_output=)、
+#   datetime.isoformat(timespec=) 等 3.7 才有的能力。
+#
+# pypinyin 仅用于「拼音首字母搜索」（如 zhjy → 智慧教育…）。
+# 未安装时工具照常运行，只是不支持拼音搜索，不会报错。
+pypinyin>=0.44.0
+
+# 托盘常驻（tray_app.py）需要；它会自动带上 Pillow（用于绘制托盘图标）。
+# 未安装时自动回落到「无托盘」模式——服务照常运行、热键照常可用，只是没有托盘图标。
+# 全局热键走 ctypes 直调 win32 RegisterHotKey，不需要额外依赖，也不需要管理员权限。
+pystray>=0.19.0

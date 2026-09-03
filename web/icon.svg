@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="星图 StarChart">
+  <title>星图 StarChart</title>
+  <!-- 纯图形图标版：与 logo.svg 图形标同一套几何、同一套颜色——
+       倾斜 14° 的四芒星火 + 一道斜向流星轨迹（9 点方向水平轨迹与星火
+       左尖角方向重叠，应用图标中省略），紫靛渐变单线描边、圆头圆角。
+       镂空描边风格在 README / 浅色背景上直接使用；
+       favicon / 托盘等小尺寸场景使用 make_icons.py 生成的紫底白色版本。 -->
+  <defs>
+    <linearGradient id="iconGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8B7CF8"/>
+      <stop offset="100%" stop-color="#5B46E0"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#iconGrad)" stroke-width="7.5"
+     stroke-linecap="round" stroke-linejoin="round">
+    <polygon points="72.7,27.1 73.4,56.3 88.3,68.0 69.7,71.4 55.3,96.9 54.6,67.7 39.7,56.0 58.3,52.6"/>
+    <line x1="26" y1="33" x2="63" y2="63"/>
+  </g>
+</svg>
