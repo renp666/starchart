@@ -1,150 +1,362 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>星图 StarChart</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%238b7cf8'/><stop offset='1' stop-color='%235b46e0'/></linearGradient><linearGradient id='t' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%23ffffff' stop-opacity='.28'/><stop offset='1' stop-color='%23ffffff' stop-opacity='0'/></linearGradient></defs><rect x='1' y='1' width='30' height='30' rx='7' fill='url(%23g)'/><rect x='1' y='1' width='30' height='16' rx='7' fill='url(%23t)'/><g stroke='%23ffffff' stroke-width='1.7' stroke-linecap='round' fill='none'><line x1='6.5' y1='8.3' x2='12.3' y2='13.0'/></g><polygon points='18.2,6.8 18.4,14.1 22.1,17.0 17.4,17.9 13.8,24.2 13.6,16.9 9.9,14.0 14.6,13.1' fill='%23ffffff'/><circle cx='26' cy='9' r='0.7' fill='rgba(255,255,255,.7)'/><circle cx='27' cy='23' r='0.6' fill='rgba(255,255,255,.6)'/><circle cx='6' cy='26' r='0.6' fill='rgba(255,255,255,.55)'/></svg>">
-<link rel="stylesheet" href="style.css?v=20260903c">
-</head>
-<body class="dark">
-<script>
-/* 先用本地缓存的主题快照上色，避免"亮色/跟随系统"用户每次都看到暗色闪一下 */
-try {
-  var t = localStorage.getItem("starchart-theme");
-  if (t === "light" || t === "dark") document.body.className = t;
-} catch (e) {}
-</script>
-<header id="topbar">
-  <div class="brand">
-    <svg class="brand-logo" viewBox="0 0 250 68" role="img" aria-label="星图 StarChart">
-      <defs>
-        <linearGradient id="brandMark" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#8B7CF8"/>
-          <stop offset="100%" stop-color="#5B46E0"/>
-        </linearGradient>
-      </defs>
-      <g transform="translate(-8.4,-5.05) scale(0.63)" fill="none"
-         stroke="url(#brandMark)" stroke-width="7.5"
-         stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="72.7,27.1 73.4,56.3 88.3,68.0 69.7,71.4 55.3,96.9 54.6,67.7 39.7,56.0 58.3,52.6"/>
-        <line x1="26" y1="33" x2="63" y2="63"/>
-      </g>
-      <text x="58" y="33" fill="currentColor" font-size="24" font-weight="800"
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>星图 StarChart</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%238b7cf8'/><stop offset='1' stop-color='%235b46e0'/></linearGradient><linearGradient id='t' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%23ffffff' stop-opacity='.28'/><stop offset='1' stop-color='%23ffffff' stop-opacity='0'/></linearGradient></defs><rect x='1' y='1' width='30' height='30' rx='7' fill='url(%23g)'/><rect x='1' y='1' width='30' height='16' rx='7' fill='url(%23t)'/><g stroke='%23ffffff' stroke-width='1.7' stroke-linecap='round' fill='none'><line x1='6.5' y1='8.3' x2='12.3' y2='13.0'/></g><polygon points='18.2,6.8 18.4,14.1 22.1,17.0 17.4,17.9 13.8,24.2 13.6,16.9 9.9,14.0 14.6,13.1' fill='%23ffffff'/><circle cx='26' cy='9' r='0.7' fill='rgba(255,255,255,.7)'/><circle cx='27' cy='23' r='0.6' fill='rgba(255,255,255,.6)'/><circle cx='6' cy='26' r='0.6' fill='rgba(255,255,255,.55)'/></svg>"
+    />
+    <link rel="stylesheet" href="style.css?v=20260903h" />
+  </head>
+  <body class="dark">
+    <script>
+      /* 先用本地缓存的主题快照上色，避免"亮色/跟随系统"用户每次都看到暗色闪一下 */
+      try {
+        var t = localStorage.getItem("starchart-theme");
+        if (t === "light" || t === "dark") document.body.className = t;
+      } catch (e) {}
+    </script>
+    <header id="topbar">
+      <div class="brand">
+        <svg
+          class="brand-logo"
+          viewBox="0 0 250 68"
+          role="img"
+          aria-label="星图 StarChart"
+        >
+          <defs>
+            <linearGradient id="brandMark" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#8B7CF8" />
+              <stop offset="100%" stop-color="#5B46E0" />
+            </linearGradient>
+          </defs>
+          <g
+            transform="translate(-8.4,-5.05) scale(0.63)"
+            fill="none"
+            stroke="url(#brandMark)"
+            stroke-width="7.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polygon
+              points="72.7,27.1 73.4,56.3 88.3,68.0 69.7,71.4 55.3,96.9 54.6,67.7 39.7,56.0 58.3,52.6"
+            />
+            <line x1="26" y1="33" x2="63" y2="63" />
+          </g>
+          <text
+            x="58"
+            y="33"
+            fill="currentColor"
+            font-size="24"
+            font-weight="800"
             letter-spacing="1.5"
-            font-family="'Arial Black','Arial Bold',Arial,Helvetica,sans-serif">STARCHART</text>
-      <text x="58" y="54" fill="currentColor" opacity=".62" font-size="18" letter-spacing="1"
-            font-family="'Microsoft YaHei','PingFang SC',sans-serif">星图 · 本地项目导航</text>
-    </svg>
-  </div>
-  <div class="search-wrap">
-    <input id="search" type="text" autocomplete="off"
-           placeholder="搜索：名称 / 介绍 / 路径 / 拼音首字母（如 zhjy）—— Ctrl+K 聚焦">
-    <button class="search-clear" id="search-clear" title="清除搜索">✕</button>
-  </div>
-  <div class="actions">
-    <button id="btn-scan" class="primary" title="重新扫描工作区">⟳ 扫描</button>
-    <button id="btn-gen" class="hidden" title="为缺少介绍的项目批量生成">✨ 生成介绍 <span id="gen-count"></span></button>
-    <button id="btn-view" title="切换视图：目录树 / 常用项目">🌳 树</button>
-    <button id="btn-trending" class="act-btn" title="GitHub 趋势榜 · 中文介绍 / 中文导读" aria-label="GitHub 趋势">
-        <svg class="act-ic" viewBox="0 0 24 24" aria-hidden="true"><g stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15.5l4.5-5.2 3.4 3 4.1-6.3 4 4.3"/><path d="M4 20h16"/></g></svg>
-      </button>
-    <button id="btn-settings" class="act-btn" title="设置" aria-label="设置">
-        <svg class="act-ic" viewBox="0 0 24 24" aria-hidden="true"><g stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></g><g fill="var(--bg3)"><circle cx="9" cy="6" r="2.4"/><circle cx="15" cy="12" r="2.4"/><circle cx="7" cy="18" r="2.4"/></g><g fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="9" cy="6" r="2.4"/><circle cx="15" cy="12" r="2.4"/><circle cx="7" cy="18" r="2.4"/></g></svg>
-      </button>
-    <button id="btn-backup" class="act-btn" title="备份 / 恢复" aria-label="备份">
-        <svg class="act-ic" viewBox="0 0 24 24" aria-hidden="true"><g stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V7 M8 11l4-4 4 4"/><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></g></svg>
-      </button>
-    <button id="btn-excluded" class="act-btn" title="已排除的项目（被藏起来的项目在此恢复）" aria-label="已排除项目">
-        <svg class="act-ic" viewBox="0 0 24 24" aria-hidden="true"><g stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14 M10 7V5.6A.6.6 0 0 1 10.6 5h2.8a.6.6 0 0 1 .6.6V7 M8 7l.6 12a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9L16 7 M10 10.5v6 M14 10.5v6"/></g></svg><span id="excluded-count" class="count-badge"></span>
-      </button>
-  </div>
-</header>
-
-<div id="progressbar" class="hidden">
-  <div id="progress-fill"></div>
-  <span id="progress-text"></span>
-  <button id="btn-stopgen">停止</button>
-</div>
-
-<div id="stale-bar" class="hidden">
-  <span id="stale-text"></span>
-  <button id="stale-rescan" class="primary">重新扫描</button>
-  <button id="stale-dismiss">本次忽略</button>
-</div>
-
-<main>
-  <aside id="tree-panel">
-    <div id="tree" role="tree" aria-label="项目树"></div>
-    <div id="empty-state" class="hidden">
-      <div class="empty-icon"><svg viewBox="0 0 32 32" width="44" height="44" aria-hidden="true"><g stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"><path d="M9 10 L15 7 L22 9 L26 15 L20 22 L12 21"/><line x1="15" y1="7" x2="13" y2="17"/><line x1="9" y1="10" x2="8" y2="15"/><line x1="22" y1="9" x2="21" y2="14"/></g><g fill="currentColor"><circle cx="9" cy="10" r="2.2"/><circle cx="15" cy="7" r="1.5"/><circle cx="22" cy="9" r="1.8"/><circle cx="26" cy="15" r="1.3"/><circle cx="20" cy="22" r="2.4"/><circle cx="12" cy="21" r="1.4"/></g></svg></div>
-      <p>星图还是空的</p>
-      <p class="dim">扫描工作区，把你的项目绘成一张星图</p>
-      <button id="empty-scan" class="primary">⟳ 立即扫描</button>
-    </div>
-  </aside>
-  <section id="detail" class="hidden" aria-live="polite"></section>
-  <section id="trend-view" class="hidden" aria-label="GitHub 趋势">
-    <div class="trend-top">
-      <h2>🔥 GitHub 趋势</h2>
-      <span id="tr-meta" class="hint"></span>
-      <span class="tr-spacer"></span>
-      <button id="tr-back" title="返回项目树（Esc）">← 返回星图</button>
-    </div>
-    <div class="hint tr-note">榜单来自 github.com/trending（服务端缓存 30 分钟）。
-      配置 LLM 后可一键生成中文一句话介绍 / 中文导读，结果长期缓存。</div>
-    <div class="trend-ctl" role="group" aria-label="筛选与拉取">
-      <div class="seg" id="tr-since" role="group" aria-label="趋势时段">
-        <button data-since="daily" class="on" aria-pressed="true">今日</button>
-        <button data-since="weekly" aria-pressed="false">本周</button>
-        <button data-since="monthly" aria-pressed="false">本月</button>
+            font-family="'Arial Black','Arial Bold',Arial,Helvetica,sans-serif"
+          >
+            STARCHART
+          </text>
+          <text
+            x="58"
+            y="54"
+            fill="currentColor"
+            opacity=".62"
+            font-size="18"
+            letter-spacing="1"
+            font-family="'Microsoft YaHei','PingFang SC',sans-serif"
+          >
+            星图 · 本地项目导航
+          </text>
+        </svg>
       </div>
-      <select id="tr-lang" aria-label="语言"><option value="">全部语言</option></select>
-      <input type="text" id="tr-filter" aria-label="过滤榜单" placeholder="过滤：仓库名 / 描述 / 语言">
-      <button id="tr-refresh" title="忽略缓存，重新拉取">🔄 刷新</button>
+      <div class="search-wrap">
+        <input
+          id="search"
+          type="text"
+          autocomplete="off"
+          placeholder="搜索：名称 / 介绍 / 路径 / 拼音首字母（如 zhjy）—— Ctrl+K 聚焦"
+        />
+        <button class="search-clear" id="search-clear" title="清除搜索">
+          ✕
+        </button>
+      </div>
+      <div class="actions">
+        <button id="btn-scan" class="primary" title="重新扫描工作区">
+          ⟳ 扫描
+        </button>
+        <button id="btn-gen" class="hidden" title="为缺少介绍的项目批量生成">
+          ✨ 生成介绍 <span id="gen-count"></span>
+        </button>
+        <nav class="view-tabs" role="tablist" aria-label="主视图">
+          <button
+            id="view-tab-tree"
+            class="view-tab on"
+            role="tab"
+            aria-selected="true"
+            title="目录树"
+          >
+            🌳 树
+          </button>
+          <button
+            id="view-tab-frequent"
+            class="view-tab"
+            role="tab"
+            aria-selected="false"
+            title="常用项目（按使用频率）"
+          >
+            ★ 常用
+          </button>
+          <button
+            id="view-tab-trend"
+            class="view-tab"
+            role="tab"
+            aria-selected="false"
+            title="GitHub 趋势榜 · 中文介绍 / 中文导读"
+          >
+            🔥 趋势
+          </button>
+        </nav>
+        <button
+          id="btn-settings"
+          class="act-btn"
+          title="设置"
+          aria-label="设置"
+        >
+          <svg class="act-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <g
+              stroke="currentColor"
+              stroke-width="1.4"
+              fill="none"
+              stroke-linecap="round"
+            >
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </g>
+            <g fill="var(--bg3)">
+              <circle cx="9" cy="6" r="2.4" />
+              <circle cx="15" cy="12" r="2.4" />
+              <circle cx="7" cy="18" r="2.4" />
+            </g>
+            <g fill="none" stroke="currentColor" stroke-width="1.4">
+              <circle cx="9" cy="6" r="2.4" />
+              <circle cx="15" cy="12" r="2.4" />
+              <circle cx="7" cy="18" r="2.4" />
+            </g>
+          </svg>
+        </button>
+        <button
+          id="btn-backup"
+          class="act-btn"
+          title="备份 / 恢复"
+          aria-label="备份"
+        >
+          <svg class="act-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <g
+              stroke="currentColor"
+              stroke-width="1.6"
+              fill="none"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M12 16V7 M8 11l4-4 4 4" />
+              <path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" />
+            </g>
+          </svg>
+        </button>
+        <button
+          id="btn-excluded"
+          class="act-btn"
+          title="已排除的项目（被藏起来的项目在此恢复）"
+          aria-label="已排除项目"
+        >
+          <svg class="act-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <g
+              stroke="currentColor"
+              stroke-width="1.6"
+              fill="none"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M5 7h14 M10 7V5.6A.6.6 0 0 1 10.6 5h2.8a.6.6 0 0 1 .6.6V7 M8 7l.6 12a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9L16 7 M10 10.5v6 M14 10.5v6"
+              />
+            </g></svg
+          ><span id="excluded-count" class="count-badge"></span>
+        </button>
+      </div>
+    </header>
+
+    <div id="progressbar" class="hidden">
+      <div id="progress-fill"></div>
+      <span id="progress-text"></span>
+      <button id="btn-stopgen">停止</button>
     </div>
-    <div class="trend-ctl" role="group" aria-label="AI 解读">
-      <button id="tr-all" class="primary">✨ 全部生成中文介绍</button>
-      <button id="tr-digest">📋 本期速览</button>
-      <input type="text" id="tr-adhoc" aria-label="解析任意仓库" placeholder="解析任意仓库：owner/repo 或 GitHub 链接">
-      <button id="tr-adhoc-go">📖 中文导读</button>
+
+    <div id="stale-bar" class="hidden">
+      <span id="stale-text"></span>
+      <button id="stale-rescan" class="primary">重新扫描</button>
+      <button id="stale-dismiss">本次忽略</button>
     </div>
-    <div class="trend-main">
-      <div id="trend-left">
-        <div id="tr-progress" class="hidden trend-progress" role="progressbar"
-             aria-label="批量生成进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-          <div class="tp-bar"><div id="tr-progress-fill"></div></div>
-          <span id="tr-progress-text" class="hint"></span>
-          <button id="tr-stop">停止</button>
+
+    <main>
+      <aside id="tree-panel">
+        <div id="tree" role="tree" aria-label="项目树"></div>
+        <div id="empty-state" class="hidden">
+          <div class="empty-icon">
+            <svg viewBox="0 0 32 32" width="44" height="44" aria-hidden="true">
+              <g
+                stroke="currentColor"
+                stroke-width="1.5"
+                fill="none"
+                stroke-linecap="round"
+              >
+                <path d="M9 10 L15 7 L22 9 L26 15 L20 22 L12 21" />
+                <line x1="15" y1="7" x2="13" y2="17" />
+                <line x1="9" y1="10" x2="8" y2="15" />
+                <line x1="22" y1="9" x2="21" y2="14" />
+              </g>
+              <g fill="currentColor">
+                <circle cx="9" cy="10" r="2.2" />
+                <circle cx="15" cy="7" r="1.5" />
+                <circle cx="22" cy="9" r="1.8" />
+                <circle cx="26" cy="15" r="1.3" />
+                <circle cx="20" cy="22" r="2.4" />
+                <circle cx="12" cy="21" r="1.4" />
+              </g>
+            </svg>
+          </div>
+          <p>星图还是空的</p>
+          <p class="dim">扫描工作区，把你的项目绘成一张星图</p>
+          <button id="empty-scan" class="primary">⟳ 立即扫描</button>
         </div>
-        <div id="tr-list" class="trend-list"></div>
-      </div>
-      <aside id="tr-rail" aria-label="AI 阅读栏">
-        <div class="rail-empty hint" id="tr-rail-empty">📖 导读与 📋 速览的结果会显示在这里，
-          不影响你继续浏览榜单。</div>
-        <div id="tr-guide-box" class="hidden guide-panel" role="region" aria-label="中文导读" aria-live="polite"></div>
-        <div id="tr-digest-box" class="hidden digest-box" role="region" aria-label="本期速览" aria-live="polite"></div>
       </aside>
-    </div>
-  </section>
-</main>
+      <section id="detail" class="hidden" aria-live="polite"></section>
+      <section id="trend-view" class="hidden" aria-label="GitHub 趋势">
+        <header class="trend-top">
+          <h2>GitHub Trends</h2>
+          <span id="tr-meta" class="hint" aria-live="polite"></span>
+          <span class="tr-spacer"></span>
+        </header>
+        <p class="hint tr-note">
+          榜单来自 github.com/trending（服务端缓存 30 分钟）· 中文介绍 /
+          导读由设置的 LLM 生成并长期缓存。
+        </p>
 
-<div id="modal-root" class="hidden"></div>
-<div id="toast" class="hidden" role="status" aria-live="polite"></div>
-<div id="netdown" class="hidden" role="alertdialog" aria-modal="true" aria-labelledby="netdown-title">
-  <div class="netdown-card">
-    <div class="netdown-title" id="netdown-title">连接不上星图服务</div>
-    <div class="netdown-msg">
-      浏览器连不上本地服务 <code id="netdown-url"></code>。<br>
-      通常是：服务未启动 / 已停止，或这是一个旧标签页。
-      <br>请先双击 <b>start.bat</b> 启动服务，再点下面的"重新连接"。
-    </div>
-    <div class="netdown-actions">
-      <button class="primary" id="netdown-reload">重新连接</button>
-    </div>
-  </div>
-</div>
+        <div class="tr-toolbar" role="group" aria-label="筛选与拉取">
+          <div class="seg" id="tr-since" role="group" aria-label="趋势时段">
+            <button data-since="daily" class="on" aria-pressed="true">
+              今日
+            </button>
+            <button data-since="weekly" aria-pressed="false">本周</button>
+            <button data-since="monthly" aria-pressed="false">本月</button>
+          </div>
+          <select id="tr-lang" aria-label="语言">
+            <option value="">全部语言</option>
+          </select>
+          <span class="tr-grow"></span>
+          <input
+            type="text"
+            id="tr-filter"
+            aria-label="过滤榜单"
+            placeholder="过滤：仓库 / 描述 / 语言"
+          />
+          <button
+            id="tr-refresh"
+            class="icon-btn"
+            title="忽略缓存，重新拉取"
+            aria-label="刷新榜单"
+          >
+            ⟳
+          </button>
+        </div>
 
-<script src="app.js?v=20260903c"></script>
-</body>
+        <div class="tr-toolbar tr-ai" role="group" aria-label="AI 解读">
+          <button id="tr-all">✨ 全部生成</button>
+          <button id="tr-digest">📋 本期速览</button>
+          <span class="tr-sep"></span>
+          <input
+            type="text"
+            id="tr-adhoc"
+            aria-label="解析任意仓库"
+            placeholder="任意仓库：owner/repo 或 GitHub 链接"
+          />
+          <button id="tr-adhoc-go">📖 导读</button>
+        </div>
+
+        <div class="trend-main">
+          <div
+            id="tr-progress"
+            class="hidden trend-progress"
+            role="progressbar"
+            aria-label="批量生成进度"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          >
+            <div class="tp-bar"><div id="tr-progress-fill"></div></div>
+            <span id="tr-progress-text" class="hint"></span>
+            <button id="tr-stop">停止</button>
+          </div>
+          <div id="tr-list" class="trend-list" aria-live="polite"></div>
+        </div>
+
+        <div id="tr-drawer-mask" class="hidden"></div>
+        <aside id="tr-rail" class="tr-drawer" aria-label="AI 阅读栏">
+          <div class="tr-drawer-head">
+            <span class="tr-drawer-title">AI 阅读</span>
+            <button
+              id="tr-drawer-close"
+              class="icon-btn"
+              title="收起 (Esc)"
+              aria-label="收起阅读栏"
+            >
+              ✕
+            </button>
+          </div>
+          <div class="tr-drawer-body">
+            <div class="rail-empty hint" id="tr-rail-empty">
+              选择一张卡片生成 📖 中文导读，或点 📋 本期速览，结果会显示在这里。
+            </div>
+            <div
+              id="tr-guide-box"
+              class="hidden guide-panel"
+              role="region"
+              aria-label="中文导读"
+              aria-live="polite"
+            ></div>
+            <div
+              id="tr-digest-box"
+              class="hidden digest-box"
+              role="region"
+              aria-label="本期速览"
+              aria-live="polite"
+            ></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <div id="modal-root" class="hidden"></div>
+    <div id="toast" class="hidden" role="status" aria-live="polite"></div>
+    <div
+      id="netdown"
+      class="hidden"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="netdown-title"
+    >
+      <div class="netdown-card">
+        <div class="netdown-title" id="netdown-title">连接不上星图服务</div>
+        <div class="netdown-msg">
+          浏览器连不上本地服务 <code id="netdown-url"></code>。<br />
+          通常是：服务未启动 / 已停止，或这是一个旧标签页。
+          <br />请先双击 <b>start.bat</b> 启动服务，再点下面的"重新连接"。
+        </div>
+        <div class="netdown-actions">
+          <button class="primary" id="netdown-reload">重新连接</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="app.js?v=20260903h"></script>
+  </body>
 </html>

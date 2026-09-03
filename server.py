@@ -3,12 +3,14 @@
 扫描工作区、生成中文介绍、路径跳转、备份导入导出。
 仅监听 127.0.0.1。
 """
+
 import base64
 import io
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -21,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 from urllib.parse import urlparse, parse_qs, quote
 from html import unescape as html_unescape
 
@@ -33,32 +36,40 @@ try:
         full = "".join(parts)
         return (initials + " " + full).lower()
 except ImportError:  # 未安装 pypinyin 时仅支持名称/路径搜索
+
     def pinyin_of(name):
         return ""
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
 # 数据目录：默认与代码同级（starchart\.starchart\），工具自包含——
 # 拷走整个 starchart 文件夹即为完整迁移；可用 STARCHART_HOME 覆盖到任意位置。
-DATA_DIR = (os.environ.get("STARCHART_HOME")
-            or os.path.join(BASE_DIR, ".starchart"))
+DATA_DIR = os.environ.get("STARCHART_HOME") or os.path.join(BASE_DIR, ".starchart")
 DATA_FILE = os.path.join(DATA_DIR, "data.json")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 LOG_FILE = os.path.join(DATA_DIR, "server.log")
 
 PROJECT_MARKERS = [
-    ".git", "package.json", "requirements.txt", "pyproject.toml",
-    "README.md", "go.mod", "Cargo.toml", "pom.xml", "app.py",
+    ".git",
+    "package.json",
+    "requirements.txt",
+    "pyproject.toml",
+    "README.md",
+    "go.mod",
+    "Cargo.toml",
+    "pom.xml",
+    "app.py",
 ]
 HEAVY_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build"}
 
-MAX_SCAN_DEPTH = 12          # 目录递归最大深度，防止超深目录栈溢出/异常结构
+MAX_SCAN_DEPTH = 12  # 目录递归最大深度，防止超深目录栈溢出/异常结构
 MAX_LOG_BYTES = 1024 * 1024  # 日志超过 1MB 轮转一份旧日志
-GIT_TIMEOUT = 2.0            # 单个 git 命令超时（秒），超时即跳过，不拖慢整体扫描
-GIT_WORKERS = 6              # 并发查询 Git 状态的线程数
-GEN_WORKERS = 3              # 并发生成介绍的线程数（AI 接口通常有限流，不宜过高）
-FILE_SEARCH_LIMIT = 300      # 项目内文件名搜索的最大结果数
-FILE_SEARCH_DEPTH = 6        # 项目内文件名搜索的最大层级
+GIT_TIMEOUT = 2.0  # 单个 git 命令超时（秒），超时即跳过，不拖慢整体扫描
+GIT_WORKERS = 6  # 并发查询 Git 状态的线程数
+GEN_WORKERS = 3  # 并发生成介绍的线程数（AI 接口通常有限流，不宜过高）
+FILE_SEARCH_LIMIT = 300  # 项目内文件名搜索的最大结果数
+FILE_SEARCH_DEPTH = 6  # 项目内文件名搜索的最大层级
 
 LOCK = threading.RLock()
 _log_lock = threading.Lock()
@@ -69,13 +80,17 @@ _migrated = False
 
 # ---------------------------------------------------------------- 日志
 
+
 def log(msg):
     """服务日志：记录会执行外部进程的操作，供事后追溯。写失败不影响主流程。"""
     line = f"{datetime.now().isoformat(timespec='seconds')} {msg}"
     try:
         with _log_lock:
             try:
-                if os.path.isfile(LOG_FILE) and os.path.getsize(LOG_FILE) > MAX_LOG_BYTES:
+                if (
+                    os.path.isfile(LOG_FILE)
+                    and os.path.getsize(LOG_FILE) > MAX_LOG_BYTES
+                ):
                     os.replace(LOG_FILE, LOG_FILE + ".1")
             except OSError:
                 pass
@@ -117,7 +132,9 @@ def _migrate_data_home():
         return  # 显式指定了目录时不自动迁移
     migrated_from = []
     for legacy in _legacy_data_dirs():
-        if os.path.normcase(os.path.abspath(legacy)) == os.path.normcase(os.path.abspath(DATA_DIR)):
+        if os.path.normcase(os.path.abspath(legacy)) == os.path.normcase(
+            os.path.abspath(DATA_DIR)
+        ):
             continue
         if not os.path.isdir(legacy):
             continue
@@ -135,28 +152,43 @@ def _migrate_data_home():
             migrated_from.append(legacy)
             log(f"已从旧目录 {legacy} 迁移：{'、'.join(moved)}")
     if migrated_from:
-        msg = (f"已把数据从旧目录迁移到 {DATA_DIR}。旧目录保留未删，"
-               f"确认新目录数据无误后可自行清理。")
+        msg = (
+            f"已把数据从旧目录迁移到 {DATA_DIR}。旧目录保留未删，"
+            f"确认新目录数据无误后可自行清理。"
+        )
         log(msg)
         print(msg)
 
 
 # ---------------------------------------------------------------- 配置与数据
 
+
 def default_config():
     workspace = os.path.dirname(os.path.dirname(BASE_DIR))
     return {
         "port": 6173,
         "roots": [workspace],
-        "blacklist": ["05zip", "node_modules", ".git", ".trae", "新建文件夹",
-                      ".agents", ".starchart", ".vscode", ".idea", "__pycache__", ".venv"],
+        "blacklist": [
+            "05zip",
+            "node_modules",
+            ".git",
+            ".trae",
+            "新建文件夹",
+            ".agents",
+            ".starchart",
+            ".vscode",
+            ".idea",
+            "__pycache__",
+            ".venv",
+        ],
         "api": {"provider": "zhipu", "baseUrl": "", "apiKey": "", "model": ""},
         "editor": {"name": "Trae", "cmd": 'trae "{path}"'},
         "backupDir": "",
-        "theme": "dark",
-        "gitStatus": True,   # 扫描时读取 Git 状态（分支 / 未提交 / 最后提交）
-        "autoScan": True,    # 服务启动时后台自动扫描一次，保持索引最新（可关）
-        "ghToken": "",       # GitHub Token（可选）：填了可提高 api.github.com 限流额度
+        "theme": "auto",
+        "gitStatus": True,  # 扫描时读取 Git 状态（分支 / 未提交 / 最后提交）
+        "autoScan": True,  # 服务启动时后台自动扫描一次，保持索引最新（可关）
+        "ghToken": "",  # GitHub Token（可选）：填了可提高 api.github.com 限流额度
+        "ghMirror": "",  # GitHub 镜像/加速前缀（可选）：ghproxy 类加速站，直连失败时用它重试；被墙 / raw 取不到 README 时填入
     }
 
 
@@ -165,6 +197,7 @@ def load_config():
     with LOCK:
         if _config is None:
             _migrate_data_home()
+            # pi-lens-ignore: unchecked-throwing-call-python
             os.makedirs(DATA_DIR, exist_ok=True)
             if os.path.isfile(CONFIG_FILE):
                 try:
@@ -182,9 +215,11 @@ def load_config():
 
 def save_config():
     with LOCK:
+        # pi-lens-ignore: unchecked-throwing-call-python
         os.makedirs(DATA_DIR, exist_ok=True)
         # 与 data.json 一致采用原子写，避免写入中断产生损坏的配置
         tmp = CONFIG_FILE + ".tmp"
+        # pi-lens-ignore: unchecked-throwing-call-python
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_config, f, ensure_ascii=False, indent=2)
         os.replace(tmp, CONFIG_FILE)
@@ -203,15 +238,18 @@ def _dpapi_encrypt(text):
         from ctypes import wintypes
 
         class _BLOB(ctypes.Structure):
-            _fields_ = [("cbData", wintypes.DWORD),
-                        ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+            _fields_ = [
+                ("cbData", wintypes.DWORD),
+                ("pbData", ctypes.POINTER(ctypes.c_ubyte)),
+            ]
 
         raw = text.encode("utf-8")
         buf = ctypes.create_string_buffer(raw)
         blob = _BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte)))
         out = _BLOB()
         if not ctypes.windll.crypt32.CryptProtectData(
-                ctypes.byref(blob), None, None, None, None, 0, ctypes.byref(out)):
+            ctypes.byref(blob), None, None, None, None, 0, ctypes.byref(out)
+        ):
             return None
         ct = ctypes.string_at(out.pbData, out.cbData)
         ctypes.windll.kernel32.LocalFree(out.pbData)
@@ -227,15 +265,18 @@ def _dpapi_decrypt(b64):
         from ctypes import wintypes
 
         class _BLOB(ctypes.Structure):
-            _fields_ = [("cbData", wintypes.DWORD),
-                        ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+            _fields_ = [
+                ("cbData", wintypes.DWORD),
+                ("pbData", ctypes.POINTER(ctypes.c_ubyte)),
+            ]
 
         enc = base64.b64decode(b64)
         buf = ctypes.create_string_buffer(enc)
         blob = _BLOB(len(enc), ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte)))
         out = _BLOB()
         if not ctypes.windll.crypt32.CryptUnprotectData(
-                ctypes.byref(blob), None, None, None, None, 0, ctypes.byref(out)):
+            ctypes.byref(blob), None, None, None, None, 0, ctypes.byref(out)
+        ):
             return None
         ct = ctypes.string_at(out.pbData, out.cbData).decode("utf-8")
         ctypes.windll.kernel32.LocalFree(out.pbData)
@@ -260,7 +301,7 @@ def api_key(cfg=None):
     cfg = cfg or load_config()
     key = (cfg.get("api") or {}).get("apiKey") or ""
     if key.startswith(DPAPI_PREFIX):
-        dec = _dpapi_decrypt(key[len(DPAPI_PREFIX):])
+        dec = _dpapi_decrypt(key[len(DPAPI_PREFIX) :])
         if dec is None:
             log("API key 解密失败（可能来自其他电脑/用户），请到设置中重新填写")
             return ""
@@ -287,15 +328,20 @@ def load_data():
 
 def save_data():
     with LOCK:
-        os.makedirs(DATA_DIR, exist_ok=True)  # 使用记录等早期写入路径可能先于 load_config 触达
+        # pi-lens-ignore: unchecked-throwing-call-python
+        os.makedirs(
+            DATA_DIR, exist_ok=True
+        )  # 使用记录等早期写入路径可能先于 load_config 触达
         # 原子写：先写临时文件再替换，避免并发/中断产生损坏的 JSON
         tmp = DATA_FILE + ".tmp"
+        # pi-lens-ignore: unchecked-throwing-call-python
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_data, f, ensure_ascii=False, indent=2)
         os.replace(tmp, DATA_FILE)
 
 
 # ---------------------------------------------------------------- 扫描
+
 
 def is_blacklisted(name, blacklist):
     low = name.lower()
@@ -316,13 +362,14 @@ def has_project_markers(path, entries):
 def fingerprint(path):
     cnt, mx = 0, 0.0
     for root, dirs, files in os.walk(path):
-        depth = root[len(path):].count(os.sep)
+        depth = root[len(path) :].count(os.sep)
         if depth >= 2:
             dirs[:] = []
             continue
         dirs[:] = [d for d in dirs if d not in HEAVY_DIRS]
         for f in files:
             cnt += 1
+            # pi-lens-ignore: SIM105
             try:
                 mx = max(mx, os.path.getmtime(os.path.join(root, f)))
             except OSError:
@@ -338,14 +385,24 @@ def detect_launchers(path, entries):
     if pj:
         try:
             with open(os.path.join(path, pj), encoding="utf-8", errors="ignore") as f:
-                scripts = (json.load(f).get("scripts") or {})
+                scripts = json.load(f).get("scripts") or {}
             for s in ("dev", "start", "serve"):
                 if s in scripts:
-                    launchers.append({"kind": "npm", "script": s,
-                                      "label": "npm start" if s == "start" else f"npm run {s}"})
+                    launchers.append(
+                        {
+                            "kind": "npm",
+                            "script": s,
+                            "label": "npm start" if s == "start" else f"npm run {s}",
+                        }
+                    )
         except Exception:
             pass
-    for fname, args in (("app.py", ""), ("main.py", ""), ("run.py", ""), ("manage.py", "runserver")):
+    for fname, args in (
+        ("app.py", ""),
+        ("main.py", ""),
+        ("run.py", ""),
+        ("manage.py", "runserver"),
+    ):
         real = lower.get(fname)
         if real:
             cmd = f"python {real}" + (f" {args}" if args else "")
@@ -354,7 +411,10 @@ def detect_launchers(path, entries):
         real = lower.get(fname)
         if real:
             launchers.append({"kind": "bat", "file": real, "label": real})
-    if any(k in lower for k in ("docker-compose.yml", "docker-compose.yaml", "compose.yaml")):
+    if any(
+        k in lower
+        for k in ("docker-compose.yml", "docker-compose.yaml", "compose.yaml")
+    ):
         launchers.append({"kind": "docker", "label": "docker compose up"})
     mk = lower.get("makefile")
     if mk:
@@ -382,22 +442,37 @@ def detect_stack(path, entries):
         try:
             with open(os.path.join(path, real), encoding="utf-8", errors="ignore") as f:
                 pj = json.load(f)
-            deps = " ".join(list((pj.get("dependencies") or {}).keys()) +
-                            list((pj.get("devDependencies") or {}).keys())).lower()
+            deps = " ".join(
+                list((pj.get("dependencies") or {}).keys())
+                + list((pj.get("devDependencies") or {}).keys())
+            ).lower()
         except Exception:
             pass
-        for key, label in (("next", "Next.js"), ("nuxt", "Nuxt"), ("svelte", "Svelte"),
-                           ("vue", "Vue"), ("react", "React"), ("electron", "Electron"),
-                           ("express", "Express"), ("vite", "Vite")):
+        for key, label in (
+            ("next", "Next.js"),
+            ("nuxt", "Nuxt"),
+            ("svelte", "Svelte"),
+            ("vue", "Vue"),
+            ("react", "React"),
+            ("electron", "Electron"),
+            ("express", "Express"),
+            ("vite", "Vite"),
+        ):
             if key in deps and label not in stack:
                 stack.append(label)
         stack.append("Node.js")
 
-    for marker, label in (("go.mod", "Go"), ("cargo.toml", "Rust"),
-                          ("requirements.txt", "Python"), ("pyproject.toml", "Python"),
-                          ("setup.py", "Python"), ("pom.xml", "Java"),
-                          ("build.gradle", "Java"), ("composer.json", "PHP"),
-                          ("cmakelists.txt", "C/C++")):
+    for marker, label in (
+        ("go.mod", "Go"),
+        ("cargo.toml", "Rust"),
+        ("requirements.txt", "Python"),
+        ("pyproject.toml", "Python"),
+        ("setup.py", "Python"),
+        ("pom.xml", "Java"),
+        ("build.gradle", "Java"),
+        ("composer.json", "PHP"),
+        ("cmakelists.txt", "C/C++"),
+    ):
         if marker in lower and label not in stack:
             stack.append(label)
 
@@ -407,6 +482,7 @@ def detect_stack(path, entries):
     return stack[:3]
 
 
+# pi-lens-ignore: E741
 def launcher_cmd(l):
     """仅接受扫描时生成的安全参数（字母/数字/点/横线），杜绝命令注入。"""
     safe = re.compile(r"^[\w][\w.\-]*$")
@@ -465,6 +541,7 @@ def restore_running():
             alive = [e for e in entries if e.get("pid") and pid_alive(e["pid"])]
             if alive:
                 RUNNING[k] = alive
+        # pi-lens-ignore: SIM300
         if RUNNING != raw:
             data["running"] = RUNNING
             save_data()
@@ -474,7 +551,9 @@ def restore_running():
 
 def dir_mtime(path):
     try:
-        return datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec="seconds")
+        return datetime.fromtimestamp(os.path.getmtime(path)).isoformat(
+            timespec="seconds"
+        )
     except OSError:
         return ""
 
@@ -488,7 +567,9 @@ def build_tree(path, blacklist, old_idx, stats, depth=0):
     except OSError:
         entries = []
 
-    is_project = marked == "manual" or (marked != "off" and has_project_markers(path, entries))
+    is_project = marked == "manual" or (
+        marked != "off" and has_project_markers(path, entries)
+    )
     too_deep = depth >= MAX_SCAN_DEPTH
 
     node = {
@@ -502,7 +583,9 @@ def build_tree(path, blacklist, old_idx, stats, depth=0):
 
     if is_project:
         node["fingerprint"] = fingerprint(path)
-        node["fileCount"] = sum(1 for e in entries if os.path.isfile(os.path.join(path, e)))
+        node["fileCount"] = sum(
+            1 for e in entries if os.path.isfile(os.path.join(path, e))
+        )
         node["launchers"] = detect_launchers(path, entries)
         node["agentHints"] = detect_agent_hints(path, entries)
         node["stack"] = detect_stack(path, entries)
@@ -542,7 +625,9 @@ def build_tree(path, blacklist, old_idx, stats, depth=0):
         if os.path.islink(full):
             continue  # 符号链接 / junction：不跟随，避免循环引用与重复统计
         try:
-            node["children"].append(build_tree(full, blacklist, old_idx, stats, depth + 1))
+            node["children"].append(
+                build_tree(full, blacklist, old_idx, stats, depth + 1)
+            )
         except OSError:
             continue  # 扫描瞬间目录被移动/删除，跳过即可
     node["children"].sort(key=lambda n: (n["type"] != "project", n["name"].lower()))
@@ -581,10 +666,17 @@ def git_status(path):
 
     def run(args):
         try:
-            r = subprocess.run(["git", "-C", path] + args,
-                               capture_output=True, timeout=GIT_TIMEOUT,
-                               creationflags=subprocess.CREATE_NO_WINDOW)
-            return r.stdout.decode("utf-8", errors="ignore").strip() if r.returncode == 0 else ""
+            r = subprocess.run(
+                ["git", "-C", path] + args,
+                capture_output=True,
+                timeout=GIT_TIMEOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            return (
+                r.stdout.decode("utf-8", errors="ignore").strip()
+                if r.returncode == 0
+                else ""
+            )
         except (OSError, subprocess.SubprocessError):
             return ""
 
@@ -602,13 +694,15 @@ def git_status(path):
                 bits = part.strip().split()
                 if len(bits) == 2 and bits[1].isdigit():
                     if bits[0] == "ahead":
+                        # pi-lens-ignore: unchecked-throwing-call-python
                         ahead = int(bits[1])
                     elif bits[0] == "behind":
+                        # pi-lens-ignore: unchecked-throwing-call-python
                         behind = int(bits[1])
-            head = head[:m.start()].strip()
+            head = head[: m.start()].strip()
         branch = head.split("...")[0].strip()
         if branch.startswith("No commits yet on "):
-            branch = branch[len("No commits yet on "):].strip()
+            branch = branch[len("No commits yet on ") :].strip()
         if branch.startswith("HEAD"):
             branch = "分离 HEAD"
 
@@ -620,8 +714,13 @@ def git_status(path):
         except (OSError, OverflowError, ValueError):
             last = ""
 
-    return {"branch": branch, "dirty": len(lines) > 1, "ahead": ahead,
-            "behind": behind, "lastCommit": last}
+    return {
+        "branch": branch,
+        "dirty": len(lines) > 1,
+        "ahead": ahead,
+        "behind": behind,
+        "lastCommit": last,
+    }
 
 
 def refresh_git_status(tree, enabled=True):
@@ -656,10 +755,12 @@ _scanning = False
 def _index_fresh(max_age_seconds=3600):
     """索引生成时间距今 < max_age_seconds 视为"刚扫过"，可跳过启动自动扫描。"""
     try:
-        ts = (load_data().get("generatedAt") or "")
+        ts = load_data().get("generatedAt") or ""
         if not ts:
             return False
-        return (datetime.now() - datetime.fromisoformat(ts)).total_seconds() < max_age_seconds
+        return (
+            datetime.now() - datetime.fromisoformat(ts)
+        ).total_seconds() < max_age_seconds
     except Exception:
         return False
 
@@ -668,8 +769,11 @@ def _safe_auto_scan():
     """启动自动扫描的运行壳：失败只记日志，不影响服务本身。"""
     try:
         r = run_scan()
-        log(f"启动自动扫描结束：项目 {r.get('projects', 0)} 个，待生成介绍 {r.get('pendingIntro', 0)} 个"
-            if r and r.get("ok") else "启动自动扫描未完成")
+        log(
+            f"启动自动扫描结束：项目 {r.get('projects', 0)} 个，待生成介绍 {r.get('pendingIntro', 0)} 个"
+            if r and r.get("ok")
+            else "启动自动扫描未完成"
+        )
     except Exception as e:
         log(f"启动自动扫描失败：{e}")
 
@@ -695,13 +799,29 @@ def _run_scan():
         index_old(data["tree"], old_idx)
     old_projects = {p for p, n in old_idx.items() if n.get("type") == "project"}
 
-    stats = {"new": 0, "projects": 0, "removed": 0, "changed": 0, "truncated": 0, "errors": []}
-    tree = {"name": "工作区", "path": "", "type": "dir", "mtime": "", "py": "", "children": []}
+    stats = {
+        "new": 0,
+        "projects": 0,
+        "removed": 0,
+        "changed": 0,
+        "truncated": 0,
+        "errors": [],
+    }
+    tree = {
+        "name": "工作区",
+        "path": "",
+        "type": "dir",
+        "mtime": "",
+        "py": "",
+        "children": [],
+    }
     for root in cfg["roots"]:
         root = os.path.normpath(root)
         if os.path.isdir(root):
             try:
-                tree["children"].append(build_tree(root, cfg["blacklist"], old_idx, stats))
+                tree["children"].append(
+                    build_tree(root, cfg["blacklist"], old_idx, stats)
+                )
             except Exception as e:
                 # 单根失败时保留该根上一次的分支，避免整个工作区从树中"消失"
                 stats["errors"].append(f"{root}：{e}")
@@ -743,9 +863,11 @@ def _run_scan():
             log(f"清理 {len(gone)} 个已移除项目的使用记录")
     removed = len(old_projects - new_projects_set)
     git_count = refresh_git_status(tree, cfg.get("gitStatus", True))
-    log(f"扫描完成：项目 {len(new_projects_set)} 个，待生成介绍 {len(pending)} 个" +
-        (f"，Git 状态 {git_count} 个" if git_count else "") +
-        (f"，截断 {stats['truncated']} 处" if stats["truncated"] else ""))
+    log(
+        f"扫描完成：项目 {len(new_projects_set)} 个，待生成介绍 {len(pending)} 个"
+        + (f"，Git 状态 {git_count} 个" if git_count else "")
+        + (f"，截断 {stats['truncated']} 处" if stats["truncated"] else "")
+    )
     return {
         "ok": True,
         "tree": tree,
@@ -774,7 +896,15 @@ def find_node(node, path):
 
 # ---------------------------------------------------------------- 介绍生成
 
-STATIC_INTRO_SOURCES = ["README.md", "readme.md", "README.txt", "README", "readme.txt", "CLAUDE.md", "需求文档.md"]
+STATIC_INTRO_SOURCES = [
+    "README.md",
+    "readme.md",
+    "README.txt",
+    "README",
+    "readme.txt",
+    "CLAUDE.md",
+    "需求文档.md",
+]
 
 
 def read_static_intro(path, project_name=""):
@@ -803,8 +933,9 @@ def read_static_intro(path, project_name=""):
             if not text or len(text) < 6:
                 continue
             # 跳过与项目名重复的标题行
-            if project_name and text.lower().replace(" ", "").replace("-", "") == \
-                    project_name.lower().replace(" ", "").replace("-", ""):
+            if project_name and text.lower().replace(" ", "").replace(
+                "-", ""
+            ) == project_name.lower().replace(" ", "").replace("-", ""):
                 continue
             return text[:50]
     return ""
@@ -823,7 +954,7 @@ def project_context(path):
             break
     listing = []
     for root, dirs, files in os.walk(path):
-        depth = root[len(path):].count(os.sep)
+        depth = root[len(path) :].count(os.sep)
         if depth >= 2:
             dirs[:] = []
             continue
@@ -841,7 +972,9 @@ def ai_intro(path, cfg):
     text = llm_chat(
         "你是一个项目索引助手。根据项目的 README 和目录结构，用不超过30字的中文一句话说明该项目是做什么的。"
         "只输出这句话本身，不要任何前缀、标点修饰或引号。",
-        user, max_tokens=100)
+        user,
+        max_tokens=100,
+    )
     return text[:60] if text else None
 
 
@@ -863,7 +996,12 @@ def generate_intro(path):
         node["intro"] = intro
         node["introSource"] = source if intro else ""
         save_data()
-    return {"ok": True, "intro": intro, "introSource": node["introSource"], "node": node}
+    return {
+        "ok": True,
+        "intro": intro,
+        "introSource": node["introSource"],
+        "node": node,
+    }
 
 
 # ---------------------------------------------------------------- 批量生成介绍
@@ -900,8 +1038,15 @@ def _batch_worker(task):
 
 def start_batch(paths):
     tid = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    task = {"paths": paths, "total": len(paths), "done": 0, "fail": 0,
-            "stop": False, "running": True, "lock": threading.Lock()}
+    task = {
+        "paths": paths,
+        "total": len(paths),
+        "done": 0,
+        "fail": 0,
+        "stop": False,
+        "running": True,
+        "lock": threading.Lock(),
+    }
     with _gen_lock:
         # 只保留最近几个已结束的任务，避免长期运行后无限累积
         finished = [k for k, v in _gen_tasks.items() if not v["running"]]
@@ -918,11 +1063,17 @@ def batch_status(tid):
         task = _gen_tasks.get(tid)
     if not task:
         return None
-    return {"ok": True, "running": task["running"], "done": task["done"],
-            "fail": task["fail"], "total": task["total"]}
+    return {
+        "ok": True,
+        "running": task["running"],
+        "done": task["done"],
+        "fail": task["fail"],
+        "total": task["total"],
+    }
 
 
 # ---------------------------------------------------------------- 打开/跳转
+
 
 def path_allowed(path):
     cfg = load_config()
@@ -931,7 +1082,10 @@ def path_allowed(path):
         return None
     for root in cfg["roots"]:
         try:
-            if os.path.commonpath([norm.lower(), os.path.normpath(root).lower()]) == os.path.normpath(root).lower():
+            if (
+                os.path.commonpath([norm.lower(), os.path.normpath(root).lower()])
+                == os.path.normpath(root).lower()
+            ):
                 return norm
         except ValueError:
             continue
@@ -940,7 +1094,7 @@ def path_allowed(path):
 
 # cmd / Windows shell 的元字符：路径一旦含这些字符，经 shell 拼接的执行分支（如
 # 自定义编辑器命令模板）会成为注入面。凡仍走 shell=True 的分支都要先过这个拦截。
-CMD_SHELL_META = re.compile(r'[&|^<>%]')
+CMD_SHELL_META = re.compile(r"[&|^<>%]")
 
 
 def _has_shell_meta(s):
@@ -961,46 +1115,71 @@ def open_path(path, mode, editor=None, agent=None):
         # 用 argv 直接传参，不走 cmd 解释，路径里的 & | ^ 等字符不再是注入面
         subprocess.Popen(["explorer", "/select," + path])
     elif mode == "terminal":
-        subprocess.Popen(["powershell", "-NoExit", "-Command",
-                          f"Set-Location -LiteralPath '{ps_quote(path)}'"],
-                         creationflags=subprocess.CREATE_NEW_CONSOLE)
+        subprocess.Popen(
+            [
+                "powershell",
+                "-NoExit",
+                "-Command",
+                f"Set-Location -LiteralPath '{ps_quote(path)}'",
+            ],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
     elif mode == "editor":
         ed = editor or {}
         if ed.get("exe"):
             exe = str(ed["exe"])
             if not exe_allowed(exe):
-                return {"ok": False, "error": "未识别的编辑器，请在设置中配置编辑器命令"}
+                return {
+                    "ok": False,
+                    "error": "未识别的编辑器，请在设置中配置编辑器命令",
+                }
             if exe.lower().endswith((".cmd", ".bat")):
                 # cmd.exe 对带空格路径的 .cmd 有引号剥离问题，改经 PowerShell 调用（隐藏辅助窗口）
                 subprocess.Popen(
-                    ["powershell", "-NoProfile", "-Command",
-                     f"& '{ps_quote(exe)}' '{ps_quote(path)}'"],
-                    creationflags=subprocess.CREATE_NO_WINDOW)
+                    [
+                        "powershell",
+                        "-NoProfile",
+                        "-Command",
+                        f"& '{ps_quote(exe)}' '{ps_quote(path)}'",
+                    ],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
                 return {"ok": True}
             # 探测到的主程序 exe：直接以 argv 传路径，避免 shell 解释路径里的特殊字符
             subprocess.Popen([exe, path])
             return {"ok": True}
         tpl = cfg.get("editor", {}).get("cmd", "")
         if not tpl:
-            return {"ok": False, "error": "未检测到可用编辑器，请在设置中配置编辑器命令"}
+            return {
+                "ok": False,
+                "error": "未检测到可用编辑器，请在设置中配置编辑器命令",
+            }
         # 命令模板是用户自定义的 shell 字符串，只能经 shell 执行；
         # 路径里的 shell 元字符会变成注入面，先拦截再放行。
         if _has_shell_meta(path):
-            return {"ok": False, "error": "路径包含特殊字符，无法通过命令模板安全打开，请改用已检测到的编辑器"}
+            return {
+                "ok": False,
+                "error": "路径包含特殊字符，无法通过命令模板安全打开，请改用已检测到的编辑器",
+            }
         subprocess.Popen(tpl.replace("{path}", path), shell=True)
     elif mode == "agent":
         ag = agent or {}
         exe = ag.get("exe")
         if not exe_allowed(exe):
-            return {"ok": False, "error": "未识别的 Agent，请确认已安装并在本机可检测到"}
+            return {
+                "ok": False,
+                "error": "未识别的 Agent，请确认已安装并在本机可检测到",
+            }
         exe = str(exe)
         if ag.get("gui"):
             # 桌面版 Agent 应用：直接启动主程序，工作目录设为项目
             subprocess.Popen([exe], cwd=path)
             return {"ok": True}
         full = f"Set-Location -LiteralPath '{ps_quote(path)}'; & '{ps_quote(exe)}'"
-        subprocess.Popen(["powershell", "-NoExit", "-Command", full],
-                         creationflags=subprocess.CREATE_NEW_CONSOLE)
+        subprocess.Popen(
+            ["powershell", "-NoExit", "-Command", full],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
     else:
         return {"ok": False, "error": "未知跳转模式"}
     return {"ok": True}
@@ -1010,6 +1189,7 @@ _last_explorer = {}
 
 
 # ---------------------------------------------------------------- 使用记录
+
 
 def record_usage(path):
     """记录一次项目访问，供「常用」视图按 frecency 排序。
@@ -1022,6 +1202,7 @@ def record_usage(path):
         data = load_data()
         usage = data.setdefault("usage", {})
         item = usage.get(path) or {}
+        # pi-lens-ignore: unchecked-throwing-call-python
         item["count"] = int(item.get("count", 0)) + 1
         item["last"] = datetime.now().isoformat(timespec="seconds")
         usage[path] = item
@@ -1035,32 +1216,50 @@ except ImportError:
 
 # 主流 AI 编辑器/Agent CLI：命令名 -> (id, 显示名)。id 用于匹配项目内配置文件证据
 EDITOR_WHICH = [
-    ("trae", "trae", "Trae"), ("trae-cn", "trae", "Trae CN"),
-    ("trae-solo", "trae", "TRAE SOLO"), ("trae-solo-cn", "trae", "TRAE SOLO CN"),
-    ("code", "vscode", "VS Code"), ("cursor", "cursor", "Cursor"),
-    ("windsurf", "windsurf", "Windsurf"), ("qoder", "qoder", "Qoder"),
+    ("trae", "trae", "Trae"),
+    ("trae-cn", "trae", "Trae CN"),
+    ("trae-solo", "trae", "TRAE SOLO"),
+    ("trae-solo-cn", "trae", "TRAE SOLO CN"),
+    ("code", "vscode", "VS Code"),
+    ("cursor", "cursor", "Cursor"),
+    ("windsurf", "windsurf", "Windsurf"),
+    ("qoder", "qoder", "Qoder"),
 ]
-EDITOR_NAME_PAT = re.compile(r"trae|cursor|visual studio code|windsurf|qoder|lingma", re.I)
+EDITOR_NAME_PAT = re.compile(
+    r"trae|cursor|visual studio code|windsurf|qoder|lingma", re.I
+)
 # 注册表 bin\*.cmd 文件名 -> (id, 显示名)
 _EDITOR_STEM_MAP = {
-    "trae": ("trae", "Trae"), "trae-cn": ("trae", "Trae CN"),
-    "trae-solo": ("trae", "TRAE SOLO"), "trae-solo-cn": ("trae", "TRAE SOLO CN"),
-    "code": ("vscode", "VS Code"), "cursor": ("cursor", "Cursor"),
-    "windsurf": ("windsurf", "Windsurf"), "qoder": ("qoder", "Qoder"),
+    "trae": ("trae", "Trae"),
+    "trae-cn": ("trae", "Trae CN"),
+    "trae-solo": ("trae", "TRAE SOLO"),
+    "trae-solo-cn": ("trae", "TRAE SOLO CN"),
+    "code": ("vscode", "VS Code"),
+    "cursor": ("cursor", "Cursor"),
+    "windsurf": ("windsurf", "Windsurf"),
+    "qoder": ("qoder", "Qoder"),
     "buddycn": ("codebuddy", "CodeBuddy CN"),
     "lingma": ("lingma", "通义灵码"),
 }
 
 # 主流终端 Agent CLI：命令名 -> (id, 显示名)
 AGENT_WHICH = [
-    ("claude", "claude", "Claude Code"), ("codex", "codex", "Codex CLI"),
-    ("gemini", "gemini", "Gemini CLI"), ("qwen", "qwen", "Qwen Code"),
-    ("iflow", "iflow", "iFlow CLI"), ("opencode", "opencode", "OpenCode"),
-    ("crush", "crush", "Crush"), ("aider", "aider", "Aider"),
-    ("copilot", "copilot", "Copilot CLI"), ("codebuddy", "codebuddy", "CodeBuddy"),
-    ("kiro-cli", "kiro", "Kiro CLI"), ("qodercli", "qoder", "Qoder CLI"),
-    ("workbuddy", "workbuddy", "WorkBuddy"), ("wb", "workbuddy", "WorkBuddy"),
-    ("zcode", "zcode", "ZCode"), ("dsh", "dsh", "DSH"),
+    ("claude", "claude", "Claude Code"),
+    ("codex", "codex", "Codex CLI"),
+    ("gemini", "gemini", "Gemini CLI"),
+    ("qwen", "qwen", "Qwen Code"),
+    ("iflow", "iflow", "iFlow CLI"),
+    ("opencode", "opencode", "OpenCode"),
+    ("crush", "crush", "Crush"),
+    ("aider", "aider", "Aider"),
+    ("copilot", "copilot", "Copilot CLI"),
+    ("codebuddy", "codebuddy", "CodeBuddy"),
+    ("kiro-cli", "kiro", "Kiro CLI"),
+    ("qodercli", "qoder", "Qoder CLI"),
+    ("workbuddy", "workbuddy", "WorkBuddy"),
+    ("wb", "workbuddy", "WorkBuddy"),
+    ("zcode", "zcode", "ZCode"),
+    ("dsh", "dsh", "DSH"),
     ("pi", "pi", "Pi Agent"),
 ]
 
@@ -1131,6 +1330,7 @@ AGENT_APP_PATTERNS = [
 def _uninstall_dir(sk):
     """从注册表卸载项推断安装目录：InstallLocation > DisplayIcon > UninstallString。"""
     try:
+        # pi-lens-ignore: reportOptionalMemberAccess
         loc = winreg.QueryValueEx(sk, "InstallLocation")[0] or ""
     except OSError:
         loc = ""
@@ -1138,6 +1338,7 @@ def _uninstall_dir(sk):
         return loc
     for val in ("DisplayIcon", "UninstallString"):
         try:
+            # pi-lens-ignore: reportOptionalMemberAccess
             s = winreg.QueryValueEx(sk, val)[0] or ""
         except OSError:
             continue
@@ -1169,8 +1370,10 @@ def detect_agents():
 
     if winreg:
         for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-            for sub_path in ("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
-                             "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"):
+            for sub_path in (
+                "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+                "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            ):
                 try:
                     key = winreg.OpenKey(root, sub_path)
                 except OSError:
@@ -1196,12 +1399,17 @@ def detect_agents():
                             exe = ""
                             bin_dir = os.path.join(d, "bin")
                             if os.path.isdir(bin_dir):
+                                # pi-lens-ignore: unchecked-throwing-call-python
                                 for f in os.listdir(bin_dir):
                                     if f.lower().endswith((".cmd", ".bat")):
                                         exe = os.path.join(bin_dir, f)
                                         break
                             gui = False
-                            if not exe and exe_name and os.path.isfile(os.path.join(d, exe_name)):
+                            if (
+                                not exe
+                                and exe_name
+                                and os.path.isfile(os.path.join(d, exe_name))
+                            ):
                                 exe = os.path.join(d, exe_name)
                                 gui = True
                             if exe:
@@ -1228,8 +1436,10 @@ def detect_editors():
 
     if winreg:
         for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-            for sub_path in ("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
-                             "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"):
+            for sub_path in (
+                "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+                "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            ):
                 try:
                     key = winreg.OpenKey(root, sub_path)
                 except OSError:
@@ -1250,11 +1460,14 @@ def detect_editors():
                         loc = winreg.QueryValueEx(sk, "InstallLocation")[0] or ""
                     except OSError:
                         loc = ""
-                    if not (EDITOR_NAME_PAT.search(disp) and loc and os.path.isdir(loc)):
+                    if not (
+                        EDITOR_NAME_PAT.search(disp) and loc and os.path.isdir(loc)
+                    ):
                         continue
                     bin_dir = os.path.join(loc, "bin")
                     if not os.path.isdir(bin_dir):
                         continue
+                    # pi-lens-ignore: unchecked-throwing-call-python
                     for f in os.listdir(bin_dir):
                         if f.lower().endswith(".cmd"):
                             stem = os.path.splitext(f)[0].lower()
@@ -1295,6 +1508,7 @@ def exe_allowed(exe):
 
 
 # ---------------------------------------------------------------- 备份
+
 
 def backup_export(dest):
     cfg = load_config()
@@ -1340,6 +1554,7 @@ def backup_import(body):
         load_config()
         load_data()
         return {"ok": True}
+    # pi-lens-ignore: no-bare-except
     except zipfile.BadZipFile:
         return {"ok": False, "error": "不是有效的 zip 文件"}
     except Exception as e:
@@ -1348,8 +1563,17 @@ def backup_import(body):
 
 # ---------------------------------------------------------------- 使用说明文档
 
-DOC_SOURCES = ["README.md", "readme.md", "README.txt", "使用说明.md", "说明.md",
-               "需求文档.md", "CLAUDE.md", "AGENTS.md", "PRODUCT.md"]
+DOC_SOURCES = [
+    "README.md",
+    "readme.md",
+    "README.txt",
+    "使用说明.md",
+    "说明.md",
+    "需求文档.md",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "PRODUCT.md",
+]
 
 
 def read_doc(path):
@@ -1371,7 +1595,7 @@ def search_files(path, q, limit=FILE_SEARCH_LIMIT):
         return []
     hits = []
     for root, dirs, files in os.walk(path):
-        depth = root[len(path):].count(os.sep)
+        depth = root[len(path) :].count(os.sep)
         if depth >= FILE_SEARCH_DEPTH:
             dirs[:] = []
             continue
@@ -1389,21 +1613,38 @@ def search_files(path, q, limit=FILE_SEARCH_LIMIT):
 # 全部走标准库 urllib，成功率与本地网络一致；结果落盘到 .starchart\trending.json 长期缓存。
 # 中文一行介绍与中文导读复用「设置」里已配好的 LLM（OpenAI 兼容），没配也能看榜单原文。
 
-GH_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-         "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+GH_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
 TREND_FILE = os.path.join(DATA_DIR, "trending.json")
-TREND_TTL = 30 * 60          # 榜单缓存 30 分钟，避免每次开面板都打一次 GitHub
-TREND_TIMEOUT = 25           # 单次网络请求超时（秒）
-TREND_README_LIMIT = 4000    # 送进 LLM 的 README 截断长度
-GH_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")  # 只认 owner/repo，防任意 URL 拼接
+TREND_TTL = 30 * 60  # 榜单缓存 30 分钟，避免每次开面板都打一次 GitHub
+TREND_TIMEOUT = 25  # 单次网络请求超时（秒）
+TREND_README_LIMIT = 4000  # 送进 LLM 的 README 截断长度
+GH_NAME_RE = re.compile(
+    r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+)  # 只认 owner/repo，防任意 URL 拼接
 
 # 语言下拉：label → GitHub trending 的 URL slug
 TREND_LANGS = [
-    ("全部语言", ""), ("Python", "python"), ("TypeScript", "typescript"),
-    ("JavaScript", "javascript"), ("Go", "go"), ("Rust", "rust"), ("C++", "c++"),
-    ("C", "c"), ("C#", "c#"), ("Java", "java"), ("Shell", "shell"),
-    ("HTML", "html"), ("CSS", "css"), ("Vue", "vue"), ("Kotlin", "kotlin"),
-    ("Swift", "swift"), ("PHP", "php"), ("Ruby", "ruby"),
+    ("全部语言", ""),
+    ("Python", "python"),
+    ("TypeScript", "typescript"),
+    ("JavaScript", "javascript"),
+    ("Go", "go"),
+    ("Rust", "rust"),
+    ("C++", "c++"),
+    ("C", "c"),
+    ("C#", "c#"),
+    ("Java", "java"),
+    ("Shell", "shell"),
+    ("HTML", "html"),
+    ("CSS", "css"),
+    ("Vue", "vue"),
+    ("Kotlin", "kotlin"),
+    ("Swift", "swift"),
+    ("PHP", "php"),
+    ("Ruby", "ruby"),
     ("Jupyter Notebook", "jupyter-notebook"),
 ]
 
@@ -1424,26 +1665,77 @@ def _trend_load():
 
 
 def _trend_save(d):
+    # pi-lens-ignore: unchecked-throwing-call-python
     os.makedirs(DATA_DIR, exist_ok=True)
     tmp = TREND_FILE + ".tmp"
+    # pi-lens-ignore: unchecked-throwing-call-python
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=1)
     os.replace(tmp, TREND_FILE)
 
 
+_tls = threading.local()  # 每线程最近一次 GitHub 失败分类，供 _gh_err_message 读取
+
+
+def _gh_err_kind(e):
+    """把 exceptions 归类为可提示的失败类型：dns / timeout / http / other。"""
+    reason = getattr(e, "reason", e)
+    if isinstance(reason, socket.gaierror):
+        return "dns"
+    if (
+        isinstance(reason, (TimeoutError, socket.timeout))
+        or "timed out" in str(reason).lower()
+    ):
+        return "timeout"
+    if isinstance(e, HTTPError):
+        return "http"
+    return "other"
+
+
+def _gh_mirror_url(url):
+    """按设置里的 GitHub 镜像/加速前缀生成重试 URL；未配置返回 None。"""
+    prefix = (load_config().get("ghMirror") or "").strip().rstrip("/")
+    if not prefix:
+        return None
+    return prefix + "/" + url
+
+
+def _gh_request(url, headers, timeout):
+    req = Request(url, headers=headers)
+    with urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
 def _gh_get(url, accept="application/vnd.github+json", timeout=TREND_TIMEOUT):
-    """带 UA 与可选 Token 的 GET，返回文本；失败返回 None。"""
+    """带 UA 与可选 Token 的 GET。直连失败后按设置里的镜像前缀重试一次；全失败返回 None。"""
     headers = {"User-Agent": GH_UA, "Accept": accept}
     token = (load_config().get("ghToken") or "").strip()
     if token:
         headers["Authorization"] = "Bearer " + token
-    try:
-        req = Request(url, headers=headers)
-        with urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", "replace")
-    except Exception as e:
-        log(f"GitHub 请求失败 {url}：{e}")
-        return None
+    kind = "other"
+    for link in (url, _gh_mirror_url(url)):
+        if not link:
+            continue
+        try:
+            return _gh_request(link, headers, timeout=timeout)
+        except Exception as e:
+            kind = _gh_err_kind(e)
+            log(f"GitHub 请求失败 {link}：{e}")
+    _tls.gh_err = kind
+    return None
+
+
+def _gh_err_message():
+    """把本线程最近一次失败分类转成可操作的提示文案。"""
+    k = getattr(_tls, "gh_err", "other")
+    return {
+        "dns": "无法解析 github.com —— 网络被墙或未走代理；可在「设置 → GitHub 镜像前缀」填加速站，或为 urllib 配置 HTTPS_PROXY",
+        "timeout": "GitHub 响应超时 —— 网络较慢或被墙；可在「设置 → GitHub 镜像前缀」填加速站或配置代理",
+        "http": "GitHub 返回异常状态码；可稍后重试，或到「设置 → GitHub 镜像前缀」填加速站",
+    }.get(
+        k,
+        "拉取 GitHub 趋势失败，请检查网络；被墙/限速时可在「设置 → GitHub 镜像前缀」填加速站",
+    )
 
 
 def _tag_text(s):
@@ -1462,13 +1754,16 @@ def _count_of(s):
         return 0
     if re.search(r"k\b", raw, re.I):
         v *= 1000
+    # pi-lens-ignore: unchecked-throwing-call-python
     return int(v)
 
 
 def parse_trending(page):
     """解析 github.com/trending 的 HTML。改版时这里的正则可能需要跟着调。"""
     items = []
-    for rank, chunk in enumerate(re.split(r'<article class="Box-row">', page or "")[1:], 1):
+    for rank, chunk in enumerate(
+        re.split(r'<article class="Box-row">', page or "")[1:], 1
+    ):
         chunk = chunk.split("</article>")[0]
         m = re.search(r'<h2[^>]*>.*?href="/([^/"]+/[^/"]+)"', chunk, re.S)
         if not m:
@@ -1478,7 +1773,9 @@ def parse_trending(page):
         desc = ""
         dm = re.search(r'<p class="col-9[^"]*">(.*?)</p>', chunk, re.S)
         if not dm:
-            dm = re.search(r'<p class="[^"]*color-fg-muted[^"]*">(.*?)</p>', chunk, re.S)
+            dm = re.search(
+                r'<p class="[^"]*color-fg-muted[^"]*">(.*?)</p>', chunk, re.S
+            )
         if dm:
             desc = _tag_text(dm.group(1))
         lang = ""
@@ -1492,35 +1789,56 @@ def parse_trending(page):
         fm = re.search(r'/forks"[^>]*>(.*?)</a>', chunk, re.S)
         if fm:
             forks = _count_of(_tag_text(fm.group(1)))
-        tm = re.search(r'float-sm-right[^>]*>(.*?)</span>', chunk, re.S)
+        tm = re.search(r"float-sm-right[^>]*>(.*?)</span>", chunk, re.S)
         if tm:
             today = _count_of(_tag_text(tm.group(1)))
         lang_color = ""
         cm = re.search(r'repo-language-color"[^>]*background-color:\s*([^;"]+)', chunk)
         if cm:
             lang_color = cm.group(1).strip()
-        items.append({"rank": rank, "fullName": full, "owner": owner, "name": name,
-                      "desc": desc, "lang": lang, "langColor": lang_color,
-                      "stars": stars, "forks": forks, "today": today,
-                      "url": "https://github.com/" + full,
-                      "zreadUrl": "https://zread.ai/" + full})
+        items.append(
+            {
+                "rank": rank,
+                "fullName": full,
+                "owner": owner,
+                "name": name,
+                "desc": desc,
+                "lang": lang,
+                "langColor": lang_color,
+                "stars": stars,
+                "forks": forks,
+                "today": today,
+                "url": "https://github.com/" + full,
+                "zreadUrl": "https://zread.ai/" + full,
+            }
+        )
     return items
 
 
 def fetch_trending(since="daily", lang="", force=False):
     """取趋势榜。先读 30 分钟内的缓存，force 或过期才真正发请求。"""
     since = since if since in ("daily", "weekly", "monthly") else "daily"
-    slug = next((s for lb, s in TREND_LANGS if lb.lower() == (lang or "").lower()), lang or "")
+    slug = next(
+        (s for lb, s in TREND_LANGS if lb.lower() == (lang or "").lower()), lang or ""
+    )
     key = f"{since}|{slug}"
     with _trend_lock:
         store = _trend_load()
         cached = store["lists"].get(key)
         if cached and not force:
+            # pi-lens-ignore: unchecked-throwing-call-python
             age = time.time() - float(cached.get("fetchedAt", 0))
             if age < TREND_TTL:
-                return {"ok": True, "items": cached.get("items", []), "cached": True,
-                        "fetchedAt": cached.get("fetchedAt"), "since": since,
-                        "lang": slug, "age": int(age)}
+                return {
+                    "ok": True,
+                    "items": cached.get("items", []),
+                    "cached": True,
+                    "fetchedAt": cached.get("fetchedAt"),
+                    "since": since,
+                    "lang": slug,
+                    # pi-lens-ignore: unchecked-throwing-call-python
+                    "age": int(age),
+                }
     base = "https://github.com/trending"
     if slug:
         base += "/" + quote(slug, safe="")
@@ -1529,22 +1847,40 @@ def fetch_trending(since="daily", lang="", force=False):
     if not page:
         if cached:
             # 网络不通时退回旧榜单，至少界面不是空的
-            return {"ok": True, "items": cached.get("items", []), "cached": True,
-                    "stale": True, "fetchedAt": cached.get("fetchedAt"),
-                    "since": since, "lang": slug,
-                    "error": "拉取失败，展示的是上一次缓存"}
-        return {"ok": False, "error": "拉取 GitHub 趋势失败，请检查网络（公司网络/代理可能需要放行 github.com）"}
+            return {
+                "ok": True,
+                "items": cached.get("items", []),
+                "cached": True,
+                "stale": True,
+                "fetchedAt": cached.get("fetchedAt"),
+                "since": since,
+                "lang": slug,
+                "error": _gh_err_message() + "；展示的是上一次缓存",
+            }
+        return {
+            "ok": False,
+            "error": _gh_err_message(),
+        }
     items = parse_trending(page)
     if not items:
-        return {"ok": False, "error": "页面已拉取但没解析到条目，GitHub 页面结构可能已改版"}
+        return {
+            "ok": False,
+            "error": "页面已拉取但没解析到条目，GitHub 页面结构可能已改版",
+        }
     now = time.time()
     with _trend_lock:
         store = _trend_load()
         store["lists"][key] = {"fetchedAt": now, "items": items}
         _trend_save(store)
     log(f"拉取 GitHub 趋势 since={since} lang={slug or 'all'} 共 {len(items)} 条")
-    return {"ok": True, "items": items, "cached": False, "fetchedAt": now,
-            "since": since, "lang": slug}
+    return {
+        "ok": True,
+        "items": items,
+        "cached": False,
+        "fetchedAt": now,
+        "since": since,
+        "lang": slug,
+    }
 
 
 def gh_repo_meta(full_name):
@@ -1556,12 +1892,14 @@ def gh_repo_meta(full_name):
         d = json.loads(page)
     except Exception:
         return {}
-    return {"defaultBranch": d.get("default_branch") or "main",
-            "desc": d.get("description") or "",
-            "lang": d.get("language") or "",
-            "stars": d.get("stargazers_count") or 0,
-            "topics": d.get("topics") or [],
-            "homepage": d.get("homepage") or ""}
+    return {
+        "defaultBranch": d.get("default_branch") or "main",
+        "desc": d.get("description") or "",
+        "lang": d.get("language") or "",
+        "stars": d.get("stargazers_count") or 0,
+        "topics": d.get("topics") or [],
+        "homepage": d.get("homepage") or "",
+    }
 
 
 def gh_readme(full_name, limit=TREND_README_LIMIT):
@@ -1569,8 +1907,11 @@ def gh_readme(full_name, limit=TREND_README_LIMIT):
     meta = gh_repo_meta(full_name)
     branch = meta.get("defaultBranch") or "main"
     for name in ("README.md", "readme.md", "README", "README.rst", "README.txt"):
-        page = _gh_get("https://raw.githubusercontent.com/%s/%s/%s" % (full_name, branch, name),
-                       accept="text/plain")
+        page = _gh_get(
+            # pi-lens-ignore: UP031
+            "https://raw.githubusercontent.com/%s/%s/%s" % (full_name, branch, name),
+            accept="text/plain",
+        )
         if page and not page.lstrip().lower().startswith("404"):
             return page[:limit], meta
     return "", meta
@@ -1582,16 +1923,24 @@ def llm_chat(system, user, max_tokens=200, temperature=0.3):
     api = cfg.get("api") or {}
     if not (api.get("baseUrl") and api.get("model")):
         return None
-    body = {"model": api["model"],
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user}],
-            "max_tokens": max_tokens, "temperature": temperature}
+    body = {
+        "model": api["model"],
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
     headers = {"Content-Type": "application/json"}
     if api.get("apiKey"):
         headers["Authorization"] = "Bearer " + api_key(cfg)
     try:
-        req = Request(api["baseUrl"].rstrip("/") + "/chat/completions",
-                      data=json.dumps(body).encode("utf-8"), headers=headers)
+        req = Request(
+            api["baseUrl"].rstrip("/") + "/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+        )
         with urlopen(req, timeout=45) as resp:
             result = json.loads(resp.read().decode("utf-8"))
         text = (result["choices"][0]["message"]["content"] or "").strip().strip('"“”')
@@ -1607,18 +1956,32 @@ def trend_intro(full_name, desc=""):
         store = _trend_load()
         hit = store["intros"].get(full_name)
         if hit and hit.get("text"):
-            return {"ok": True, "text": hit["text"], "cached": True, "source": hit.get("source", "ai")}
+            return {
+                "ok": True,
+                "text": hit["text"],
+                "cached": True,
+                "source": hit.get("source", "ai"),
+            }
     readme, meta = gh_readme(full_name)
     if not readme and not desc:
         desc = meta.get("desc", "")
-    user = ("项目：%s\n简介：%s\n\nREADME 内容：\n%s" %
-            (full_name, desc or meta.get("desc") or "（无）", readme or "（未取到 README）"))
+    # pi-lens-ignore: UP031
+    user = "项目：%s\n简介：%s\n\nREADME 内容：\n%s" % (
+        full_name,
+        desc or meta.get("desc") or "（无）",
+        readme or "（未取到 README）",
+    )
     text = llm_chat(
         "你是一个开源项目索引助手。根据项目简介和 README，用 15~30 字中文一句话说明这个项目是什么、解决什么问题。"
         "只输出这句话本身，不要任何前缀、编号、标点修饰或引号。",
-        user, max_tokens=100)
+        user,
+        max_tokens=100,
+    )
     if not text:
-        return {"ok": False, "error": "AI 生成失败：请先在 ⚙ 设置里配置并测试 LLM（或检查网络）"}
+        return {
+            "ok": False,
+            "error": "AI 生成失败：请先在 ⚙ 设置里配置并测试 LLM（或检查网络）",
+        }
     text = text[:60]
     with _trend_lock:
         store = _trend_load()
@@ -1658,8 +2021,15 @@ def _trend_batch_worker(task):
 
 def start_trend_batch(items):
     tid = "t" + datetime.now().strftime("%Y%m%d%H%M%S%f")
-    task = {"items": items, "total": len(items), "done": 0, "fail": 0,
-            "stop": False, "running": True, "lock": threading.Lock()}
+    task = {
+        "items": items,
+        "total": len(items),
+        "done": 0,
+        "fail": 0,
+        "stop": False,
+        "running": True,
+        "lock": threading.Lock(),
+    }
     with _trend_task_lock:
         finished = [k for k, v in _trend_tasks.items() if not v["running"]]
         for old in finished[:-4]:
@@ -1675,8 +2045,13 @@ def trend_batch_status(tid):
         task = _trend_tasks.get(tid)
     if not task:
         return None
-    return {"ok": True, "running": task["running"], "done": task["done"],
-            "fail": task["fail"], "total": task["total"]}
+    return {
+        "ok": True,
+        "running": task["running"],
+        "done": task["done"],
+        "fail": task["fail"],
+        "total": task["total"],
+    }
 
 
 def _clean_guide(text):
@@ -1684,8 +2059,8 @@ def _clean_guide(text):
     lines = []
     for ln in (text or "").splitlines():
         s = ln.rstrip()
-        s = re.sub(r"^\s*\d+\s*[)）.、]\s*", "", s)          # 1) / 2、 之类编号
-        s = re.sub(r"^\s*[-•]\s*[-•]\s*", "- ", s)           # '- - ' 重复
+        s = re.sub(r"^\s*\d+\s*[)）.、]\s*", "", s)  # 1) / 2、 之类编号
+        s = re.sub(r"^\s*[-•]\s*[-•]\s*", "- ", s)  # '- - ' 重复
         s = re.sub(r"^[-•]\s*(?=\S)", "- ", s)
         if s.strip():
             lines.append(s)
@@ -1701,20 +2076,34 @@ def trend_guide(full_name, desc=""):
             return {"ok": True, "text": hit["text"], "cached": True}
     readme, meta = gh_readme(full_name)
     topics = meta.get("topics") or []
-    user = ("项目：%s\n简介：%s\n主题标签：%s\n主语言：%s\nStar：%s\n\nREADME 内容：\n%s" % (
-        full_name, desc or meta.get("desc") or "（无）",
-        "、".join(topics[:8]) or "（无）", meta.get("lang") or "（未知）",
-        meta.get("stars") or "（未知）", readme or "（未取到 README）"))
+    user = (
+        # pi-lens-ignore: UP031
+        "项目：%s\n简介：%s\n主题标签：%s\n主语言：%s\nStar：%s\n\nREADME 内容：\n%s"
+        % (
+            full_name,
+            desc or meta.get("desc") or "（无）",
+            "、".join(topics[:8]) or "（无）",
+            meta.get("lang") or "（未知）",
+            meta.get("stars") or "（未知）",
+            readme or "（未取到 README）",
+        )
+    )
     text = llm_chat(
-        "你是一个中文开源项目导读助手。严格按下面格式输出纯文本，不要 Markdown 标题符号、不要编号、"
+        "你是一个中文开源项目导读助手。严格按下述纯文本格式输出，不要 Markdown 标题符号、不要编号、"
         "不要客套话、不要重复项目名：\n"
-        "第一行：一句话说明这个项目是什么（≤30 字）\n"
-        "接下来 3 行：核心要点，每行以 '- ' 开头，每条 ≤25 字\n"
-        "再一行：以「适合：」开头，说明适合谁用（≤30 字）\n"
-        "最后一行：以「上手：」开头，给出上手建议（≤40 字，尽量包含关键安装/启动命令）",
-        user, max_tokens=500)
+        "第 1 行：用一句话说清这个项目是什么、解决什么问题（≤30 字，不加任何前缀）。\n"
+        "第 2-4 行：恰好 3 个核心要点，每行以 '- ' 开头，每条 ≤25 字，只说干货事实，不要凑数。\n"
+        "第 5 行：以「适合：」开头，说明适合谁用（≤30 字）。\n"
+        "第 6 行：以「上手：」开头，给出最省事的上手/安装方式（≤45 字）；其中任何命令或包名一律用反引号包裹，如 `pip install x`。\n"
+        "严格只输出这 6 行。",
+        user,
+        max_tokens=500,
+    )
     if not text:
-        return {"ok": False, "error": "AI 生成失败：请先在 ⚙ 设置里配置并测试 LLM（或检查网络）"}
+        return {
+            "ok": False,
+            "error": "AI 生成失败：请先在 ⚙ 设置里配置并测试 LLM（或检查网络）",
+        }
     text = _clean_guide(text)
     with _trend_lock:
         store = _trend_load()
@@ -1737,10 +2126,19 @@ def trend_digest(since="weekly", lang="", items=None):
         items = r.get("items") or []
     if not items:
         return {"ok": False, "error": "没有可分析的榜单数据"}
-    brief = "\n".join("%d. %s（%s，★%s，本期 +%s）：%s" % (
-        it.get("rank", 0), it.get("fullName", ""), it.get("lang") or "未知语言",
-        it.get("stars", 0), it.get("today", 0), (it.get("desc") or "")[:120])
-        for it in items[:25])
+    brief = "\n".join(
+        # pi-lens-ignore: UP031
+        "%d. %s（%s，★%s，本期 +%s）：%s"
+        % (
+            it.get("rank", 0),
+            it.get("fullName", ""),
+            it.get("lang") or "未知语言",
+            it.get("stars", 0),
+            it.get("today", 0),
+            (it.get("desc") or "")[:120],
+        )
+        for it in items[:25]
+    )
     text = llm_chat(
         "你是开源趋势观察员。下面是一份 GitHub Trending 榜单，请用中文写「本期速览」，严格按格式：\n"
         "第 1 行：以「本期风向：」开头，一句话总括（≤40 字）。\n"
@@ -1748,11 +2146,16 @@ def trend_digest(since="weekly", lang="", items=None):
         "写「出现了哪一类项目 / 什么技术主题」，禁止逐个仓库罗列。\n"
         "第 6-8 行：恰好 3 条推荐，每行格式为「推荐：owner/repo —— 原因（≤15 字）」。\n"
         "只输出这 8 行，不要标题、不要客套、不要重复榜单数据。",
-        brief, max_tokens=600, temperature=0.5)
+        brief,
+        max_tokens=600,
+        temperature=0.5,
+    )
     if not text:
         return {"ok": False, "error": "AI 生成失败：请先在 ⚙ 设置里配置并测试 LLM"}
-    text = "\n".join(re.sub(r"^\s*[-•]\s*(?=推荐：)", "", ln)
-                     for ln in _clean_guide(text).splitlines())
+    text = "\n".join(
+        re.sub(r"^\s*[-•]\s*(?=推荐：)", "", ln)
+        for ln in _clean_guide(text).splitlines()
+    )
     with _trend_lock:
         store = _trend_load()
         store["digests"][key] = {"text": text, "at": time.time()}
@@ -1765,8 +2168,10 @@ def trend_store_public():
     """给前端的已缓存中文结果（榜单接口会一并带上，前端无需再取一次）。"""
     with _trend_lock:
         store = _trend_load()
-    return {"intros": {k: v.get("text", "") for k, v in store["intros"].items()},
-            "guides": {k: v.get("text", "") for k, v in store["guides"].items()}}
+    return {
+        "intros": {k: v.get("text", "") for k, v in store["intros"].items()},
+        "guides": {k: v.get("text", "") for k, v in store["guides"].items()},
+    }
 
 
 # ---------------------------------------------------------------- HTTP
@@ -1795,6 +2200,7 @@ def open_ui(url=None, min_interval=1.0):
 
 
 def mask_config(cfg):
+    # pi-lens-ignore: unchecked-throwing-call-python
     out = json.loads(json.dumps(cfg))
     if out.get("api", {}).get("apiKey"):
         out["api"]["apiKey"] = MASK
@@ -1805,6 +2211,7 @@ def pid_alive(pid):
     """Windows 下检测进程是否仍存活（STILL_ACTIVE）。检测失败时保守视为存活。"""
     try:
         import ctypes
+
         k = ctypes.windll.kernel32
         h = k.OpenProcess(0x0400, False, pid)  # PROCESS_QUERY_INFORMATION
         if not h:
@@ -1849,6 +2256,7 @@ class Handler(BaseHTTPRequestHandler):
     # 所有响应均带正确 Content-Length，切到 keep-alive 安全。
     protocol_version = "HTTP/1.1"
 
+    # pi-lens-ignore: reportIncompatibleMethodOverride
     def log_message(self, fmt, *args):
         pass
 
@@ -1861,12 +2269,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _body_json(self):
+        # pi-lens-ignore: unchecked-throwing-call-python
         length = int(self.headers.get("Content-Length", 0))
         if not length:
             return {}
+        # pi-lens-ignore: unchecked-throwing-call-python
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def _body_bytes(self):
+        # pi-lens-ignore: unchecked-throwing-call-python
         length = int(self.headers.get("Content-Length", 0))
         return self.rfile.read(length) if length else b""
 
@@ -1903,11 +2314,16 @@ class Handler(BaseHTTPRequestHandler):
             real = path_allowed(qs.get("path", [""])[0])
             if not real:
                 return self._json({"ok": False, "error": "路径不在扫描根内或不存在"})
-            return self._json({"ok": True, "files": search_files(real, qs.get("q", [""])[0])})
+            return self._json(
+                {"ok": True, "files": search_files(real, qs.get("q", [""])[0])}
+            )
         if path == "/api/running":
             prune_running()
-            items = [{"path": k, "pid": e["pid"], "cmd": e["cmd"]}
-                     for k, v in RUNNING.items() for e in v]
+            items = [
+                {"path": k, "pid": e["pid"], "cmd": e["cmd"]}
+                for k, v in RUNNING.items()
+                for e in v
+            ]
             return self._json({"ok": True, "running": items})
         if path == "/api/editors":
             editors, agents = detect_all()
@@ -1916,9 +2332,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "scanning": _scanning})
         if path == "/api/trending":
             qs = parse_qs(urlparse(self.path).query)
-            r = fetch_trending((qs.get("since") or ["daily"])[0],
-                               (qs.get("lang") or [""])[0],
-                               (qs.get("refresh") or [""])[0] == "1")
+            r = fetch_trending(
+                (qs.get("since") or ["daily"])[0],
+                (qs.get("lang") or [""])[0],
+                (qs.get("refresh") or [""])[0] == "1",
+            )
             if r.get("ok"):
                 r.update(trend_store_public())
                 r["langs"] = [lb for lb, _ in TREND_LANGS]
@@ -1931,8 +2349,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(st)
         return self._static(path)
 
-    TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css",
-             ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
+    TYPES = {
+        ".html": "text/html",
+        ".js": "text/javascript",
+        ".css": "text/css",
+        ".svg": "image/svg+xml",
+        ".png": "image/png",
+        ".ico": "image/x-icon",
+    }
 
     def _static(self, path):
         if path == "/":
@@ -1944,14 +2368,19 @@ class Handler(BaseHTTPRequestHandler):
         if not os.path.isfile(full):
             return self._json({"ok": False, "error": "not found"}, 404)
         ext = os.path.splitext(full)[1]
+        # pi-lens-ignore: unchecked-throwing-call-python
         with open(full, "rb") as f:
             body = f.read()
         self.send_response(200)
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
-        self.send_header("Content-Type", self.TYPES.get(ext, "application/octet-stream") + "; charset=utf-8"
-                         if ext in self.TYPES else "application/octet-stream")
+        self.send_header(
+            "Content-Type",
+            self.TYPES.get(ext, "application/octet-stream") + "; charset=utf-8"
+            if ext in self.TYPES
+            else "application/octet-stream",
+        )
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1971,8 +2400,11 @@ class Handler(BaseHTTPRequestHandler):
                 body = self._body_json()
                 tree = load_data().get("tree") or {}
                 # 只接受树中真实存在的项目，避免传入任意路径
-                paths = [p for p in (body.get("paths") or [])
-                         if isinstance(p, str) and find_node(tree, p)]
+                paths = [
+                    p
+                    for p in (body.get("paths") or [])
+                    if isinstance(p, str) and find_node(tree, p)
+                ]
                 if not paths:
                     return self._json({"ok": False, "error": "没有可生成介绍的项目"})
                 tid, task = start_batch(paths)
@@ -1988,7 +2420,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/intro/manual":
                 body = self._body_json()
                 with LOCK:
-                    node = find_node(load_data().get("tree") or {}, body.get("path", ""))
+                    node = find_node(
+                        load_data().get("tree") or {}, body.get("path", "")
+                    )
                     if not node:
                         return self._json({"ok": False, "error": "找不到节点"})
                     node["intro"] = (body.get("text") or "").strip()[:100]
@@ -1998,7 +2432,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/mark":
                 body = self._body_json()
                 with LOCK:
-                    node = find_node(load_data().get("tree") or {}, body.get("path", ""))
+                    node = find_node(
+                        load_data().get("tree") or {}, body.get("path", "")
+                    )
                     if not node:
                         return self._json({"ok": False, "error": "找不到节点"})
                     mark = body.get("mark")
@@ -2010,7 +2446,9 @@ class Handler(BaseHTTPRequestHandler):
                 # 收藏 / 标签 / 备注：用户随手维护的轻量元数据
                 body = self._body_json()
                 with LOCK:
-                    node = find_node(load_data().get("tree") or {}, body.get("path", ""))
+                    node = find_node(
+                        load_data().get("tree") or {}, body.get("path", "")
+                    )
                     if not node:
                         return self._json({"ok": False, "error": "找不到节点"})
                     if "starred" in body:
@@ -2021,14 +2459,18 @@ class Handler(BaseHTTPRequestHandler):
                         raw = body.get("tags") or []
                         if isinstance(raw, str):
                             raw = re.split(r"[,，]", raw)
-                        node["tags"] = [str(t).strip()[:20] for t in raw if str(t).strip()][:10]
+                        node["tags"] = [
+                            str(t).strip()[:20] for t in raw if str(t).strip()
+                        ][:10]
                     save_data()
                 return self._json({"ok": True, "node": node})
             if path == "/api/open":
                 body = self._body_json()
                 real = path_allowed(body.get("path", ""))
                 if not real:
-                    return self._json({"ok": False, "error": "路径不在扫描根内或不存在"})
+                    return self._json(
+                        {"ok": False, "error": "路径不在扫描根内或不存在"}
+                    )
                 mode = body.get("mode", "explorer")
                 log(f"跳转 {real} mode={mode}")
                 r = open_path(real, mode, body.get("editor"), body.get("agent"))
@@ -2042,13 +2484,17 @@ class Handler(BaseHTTPRequestHandler):
                 body = self._body_json()
                 real = path_allowed(body.get("path", ""))
                 if not real:
-                    return self._json({"ok": False, "error": "路径不在扫描根内或不存在"})
+                    return self._json(
+                        {"ok": False, "error": "路径不在扫描根内或不存在"}
+                    )
                 cmd = launcher_cmd(body.get("launcher") or {})
                 if not cmd:
                     return self._json({"ok": False, "error": "无效的启动入口"})
                 full = f"Set-Location -LiteralPath '{ps_quote(real)}'; {cmd}"
-                proc = subprocess.Popen(["powershell", "-NoExit", "-Command", full],
-                                        creationflags=subprocess.CREATE_NEW_CONSOLE)
+                proc = subprocess.Popen(
+                    ["powershell", "-NoExit", "-Command", full],
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,
+                )
                 # RUNNING 会被 GET /api/running 的 prune_running 并发读取（持锁迭代），
                 # 这里的增也需持锁，避免 dict 在迭代中途被改大小抛异常。
                 with LOCK:
@@ -2068,8 +2514,10 @@ class Handler(BaseHTTPRequestHandler):
                     removed = RUNNING.pop(target, [])
                 for entry in removed:
                     try:
-                        subprocess.run(["taskkill", "/PID", str(entry["pid"]), "/T", "/F"],
-                                       capture_output=True)
+                        subprocess.run(
+                            ["taskkill", "/PID", str(entry["pid"]), "/T", "/F"],
+                            capture_output=True,
+                        )
                         killed.append(entry["pid"])
                     except OSError:
                         pass
@@ -2079,29 +2527,41 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "killed": killed})
             if path.startswith("/api/trending/"):
                 # 榜单相关：只接受 owner/repo 形式的仓库名，杜绝拼进 URL 的任意输入
-                sub = path[len("/api/trending/"):]
+                sub = path[len("/api/trending/") :]
                 body = self._body_json()
                 if sub == "intro":
                     name = str(body.get("fullName", "")).strip()
                     if not GH_NAME_RE.match(name):
-                        return self._json({"ok": False, "error": "仓库名格式应为 owner/repo"})
+                        return self._json(
+                            {"ok": False, "error": "仓库名格式应为 owner/repo"}
+                        )
                     return self._json(trend_intro(name, str(body.get("desc") or "")))
                 if sub == "guide":
                     name = str(body.get("fullName", "")).strip()
                     if not GH_NAME_RE.match(name):
-                        return self._json({"ok": False, "error": "仓库名格式应为 owner/repo"})
+                        return self._json(
+                            {"ok": False, "error": "仓库名格式应为 owner/repo"}
+                        )
                     return self._json(trend_guide(name, str(body.get("desc") or "")))
                 if sub == "intros":
                     raw = body.get("items") or []
                     items = []
                     for it in raw:
-                        n = str(it.get("fullName", "")).strip() if isinstance(it, dict) else ""
+                        n = (
+                            str(it.get("fullName", "")).strip()
+                            if isinstance(it, dict)
+                            else ""
+                        )
                         if GH_NAME_RE.match(n):
-                            items.append({"fullName": n, "desc": str(it.get("desc") or "")})
+                            items.append(
+                                {"fullName": n, "desc": str(it.get("desc") or "")}
+                            )
                     if not items:
                         return self._json({"ok": False, "error": "没有可生成的仓库"})
                     tid, task = start_trend_batch(items)
-                    return self._json({"ok": True, "taskId": tid, "total": task["total"]})
+                    return self._json(
+                        {"ok": True, "taskId": tid, "total": task["total"]}
+                    )
                 if sub == "intros/stop":
                     with _trend_task_lock:
                         task = _trend_tasks.get(str(body.get("taskId", "")))
@@ -2109,14 +2569,27 @@ class Handler(BaseHTTPRequestHandler):
                         task["stop"] = True
                     return self._json({"ok": True})
                 if sub == "digest":
-                    return self._json(trend_digest(str(body.get("since") or "weekly"),
-                                                   str(body.get("lang") or "")))
+                    return self._json(
+                        trend_digest(
+                            str(body.get("since") or "weekly"),
+                            str(body.get("lang") or ""),
+                        )
+                    )
             if path == "/api/config":
                 body = self._body_json().get("config", {})
                 cfg = load_config()
                 with LOCK:
-                    for key in ("port", "roots", "blacklist", "editor", "backupDir",
-                                "gitStatus", "autoScan", "ghToken"):
+                    for key in (
+                        "port",
+                        "roots",
+                        "blacklist",
+                        "editor",
+                        "backupDir",
+                        "gitStatus",
+                        "autoScan",
+                        "ghToken",
+                        "ghMirror",
+                    ):
                         if key in body:
                             cfg[key] = body[key]
                     if body.get("theme") in ("dark", "light", "auto"):
@@ -2139,7 +2612,13 @@ class Handler(BaseHTTPRequestHandler):
                 if not (api.get("baseUrl") and api.get("model")):
                     return self._json({"ok": False, "error": "请填写 baseUrl 和模型名"})
                 text = _test_api(api)
-                return self._json({"ok": bool(text), "reply": text, "error": None if text else "请求失败，请检查地址/key/模型名"})
+                return self._json(
+                    {
+                        "ok": bool(text),
+                        "reply": text,
+                        "error": None if text else "请求失败，请检查地址/key/模型名",
+                    }
+                )
             if path == "/api/backup/export":
                 r = backup_export(self._body_json().get("dest", ""))
                 log(f"导出备份 ok={r.get('ok')} path={r.get('path', '')}")
@@ -2159,9 +2638,11 @@ def _test_api(api):
     headers = {"Content-Type": "application/json"}
     if api.get("apiKey"):
         headers["Authorization"] = "Bearer " + api["apiKey"]
-    body = {"model": api["model"],
-            "messages": [{"role": "user", "content": "回复OK"}],
-            "max_tokens": 5}
+    body = {
+        "model": api["model"],
+        "messages": [{"role": "user", "content": "回复OK"}],
+        "max_tokens": 5,
+    }
     try:
         req = Request(url, data=json.dumps(body).encode(), headers=headers)
         with urlopen(req, timeout=15) as resp:
@@ -2178,13 +2659,16 @@ def create_server():
     """
     global PORT
     cfg = load_config()
+    # pi-lens-ignore: unchecked-throwing-call-python
     port = int(cfg.get("port", 6173))
     PORT = port
     restore_running()  # 服务启动（控制台/托盘共用）时恢复上次运行中的进程
     # 启动时"维持最新"：旧索引立即可用，若已较旧则后台异步重建索引（不阻塞首屏）。
     # 刚扫过（1 小时内）不重复扫；可用 config.autoScan 关闭。
     if cfg.get("autoScan", True) and not _index_fresh():
-        threading.Timer(1.5, lambda: threading.Thread(target=_safe_auto_scan, daemon=True).start()).start()
+        threading.Timer(
+            1.5, lambda: threading.Thread(target=_safe_auto_scan, daemon=True).start()
+        ).start()
     # 界面地址统一用 127.0.0.1 而非 localhost：服务只绑定 IPv4 loopback。
     # localhost 在部分环境（DNS、系统代理、localhost 解析到 ::1 等）下不确定，
     # 会出现「页面能打开、fetch 接口却连不上」。用 IP 直连是确定性连接目标。
