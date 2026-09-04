@@ -1937,34 +1937,16 @@ function closeModal() {
 
 const MASK_JS = "********"; // 与后端 MASK 一致：key 回显掩码
 
-const PROVIDERS = {
-	zhipu: {
-		label: "智谱（glm-4-flash 免费）",
-		baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-		model: "glm-4-flash",
-	},
-	siliconflow: {
-		label: "硅基流动（Qwen2.5-7B 免费）",
-		baseUrl: "https://api.siliconflow.cn/v1",
-		model: "Qwen/Qwen2.5-7B-Instruct",
-	},
-	deepseek: {
-		label: "DeepSeek（deepseek-chat，新用户送额度）",
-		baseUrl: "https://api.deepseek.com",
-		model: "deepseek-chat",
-	},
-	dashscope: {
-		label: "通义千问（qwen-turbo，新用户送额度）",
-		baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		model: "qwen-turbo",
-	},
-	custom: { label: "自定义 OpenAI 兼容", baseUrl: "", model: "" },
-};
+// 添加模型时的厂商模板（name/baseUrl/model）；key 一律用户自行申请，不预置
+const MODEL_TEMPLATES = [
+	{ name: "智谱（免费）", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-flash" },
+	{ name: "硅基流动", baseUrl: "https://api.siliconflow.cn/v1", model: "Qwen/Qwen2.5-7B-Instruct" },
+	{ name: "通义千问", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-turbo" },
+	{ name: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-chat" },
+	{ name: "自定义 OpenAI 兼容", baseUrl: "", model: "" },
+];
 
 function openSettings() {
-	const api_ = config.api || {};
-	// 各厂商分别保存的 key（后端掩码：有=********，无=""），切换厂商时据此回填 key 栏
-	const savedKeys = api_.apiKeys || {};
 	const oldPort = config.port || 6173;
 	const settingRoots = [...(config.roots || [])];
 	// 保存前快照：用于保存后判断扫描范围（黑名单/根）是否变更，提示一键重扫
@@ -1976,9 +1958,9 @@ function openSettings() {
     <div class="set-wrap">
     <nav class="set-nav" id="set-nav">
       <button data-sec="sec-general" class="on">通用</button>
-      <button data-sec="sec-scan">扫描</button>
-      <button data-sec="sec-ai">AI 服务</button>
-      <button data-sec="sec-adv">高级</button>
+      <button data-sec="sec-scan">扫描配置</button>
+      <button data-sec="sec-ai">模型设置</button>
+      <button data-sec="sec-adv">其他设置</button>
     </nav>
     <div class="set-body" id="set-body">
     <section class="set-sec" id="sec-general">
@@ -1998,7 +1980,7 @@ function openSettings() {
     </div>
     </section>
     <section class="set-sec" id="sec-scan">
-    <h4>扫描</h4>
+    <h4>扫描配置</h4>
     <div class="field"><label>扫描根目录</label>
       <div class="taglist" id="set-roots-tags"></div>
       <button id="set-roots-pick" type="button" style="flex:0 0 auto">📁 选择目录…</button>
@@ -2035,51 +2017,33 @@ function openSettings() {
     </div>
     </section>
     <section class="set-sec" id="sec-ai">
-    <h4>AI 服务</h4>
-    <div class="field"><label>配置库（可存多套，一键切换生效）</label>
-      <div id="set-profiles" class="profiles-list"></div>
-      <div class="row" style="margin-top:6px">
-        <input type="text" id="set-profile-name" placeholder="新配置名称，如：免费·智谱 / 付费·DeepSeek" style="flex:1">
-        <button type="button" id="set-profile-add" style="flex:0 0 auto" title="把当前表单里的厂商/地址/模型/Key 存为新的一套">＋ 存为当前</button>
-      </div>
-      <div class="hint">在下方编辑的就是「当前生效」配置；点某套「启用」即切换为当前生效（需保存）。</div>
-    </div>
-    <div class="field"><label>AI 服务商</label>
-      <select id="set-provider">
-        ${Object.entries(PROVIDERS)
-					.map(([k, v]) => `<option value="${k}">${v.label}</option>`)
-					.join("")}
-      </select>
-    </div>
-    <div class="field"><label>API 地址 (baseUrl)</label>
-      <input type="text" id="set-baseurl" value="${esc(api_.baseUrl || "")}">
-    </div>
-    <div class="field"><label>API Key</label>
-      <div class="row">
-        <input type="password" id="set-apikey" value="${esc(api_.apiKey || "")}" autocomplete="off">
-        <button type="button" id="set-apikey-eye" class="icon-btn" style="flex:0 0 auto" title="显示 / 隐藏 API Key" aria-label="显示或隐藏 API Key">👁</button>
-      </div>
-    </div>
-    <div class="field"><label>模型名</label>
-      <input type="text" id="set-model" value="${esc(api_.model || "")}">
-    </div>
-    <div class="row">
-      <button id="set-test">测试连接</button>
-      <span id="set-test-result" class="hint"></span>
-    </div>
-    <div class="field" id="set-free-models"><label>可用的免费大模型（多厂商）</label>
+    <h4>模型设置</h4>
+    <div class="field" id="set-free-models"><label>推荐的免费大模型（含申请入口）</label>
       <ul class="free-models">
-        <li><b>智谱</b> · glm-4-flash —— 长期免费，已内置默认。<a target="_blank" rel="noopener" href="https://open.bigmodel.cn">官网申请 Key ↗</a></li>
-        <li><b>硅基流动</b> · 多款开源模型有免费档，已内置。<a target="_blank" rel="noopener" href="https://siliconflow.cn">官网申请 Key ↗</a></li>
-        <li><b>通义千问（阿里·百炼）</b> · qwen-turbo —— 新用户送额度。<a target="_blank" rel="noopener" href="https://bailian.console.aliyun.com">官网申请 Key ↗</a></li>
-        <li><b>DeepSeek</b> · deepseek-chat —— 新用户送额度。<a target="_blank" rel="noopener" href="https://platform.deepseek.com">官网申请 Key ↗</a></li>
-        <li>其它厂商：选「自定义 OpenAI 兼容」填入对应 baseUrl / 模型 / Key，即可共用本页全部 AI 功能。</li>
+        <li><b>智谱</b> · glm-4-flash —— 长期免费。<a target="_blank" rel="noopener" href="https://open.bigmodel.cn">申请 Key ↗</a></li>
+        <li><b>硅基流动</b> · 多款开源模型有免费档。<a target="_blank" rel="noopener" href="https://siliconflow.cn">申请 Key ↗</a></li>
+        <li><b>通义千问（阿里·百炼）</b> · qwen-turbo —— 新用户送额度。<a target="_blank" rel="noopener" href="https://bailian.console.aliyun.com">申请 Key ↗</a></li>
+        <li><b>DeepSeek</b> · deepseek-chat —— 新用户送额度。<a target="_blank" rel="noopener" href="https://platform.deepseek.com">申请 Key ↗</a></li>
+        <li>其它厂商：添加模型时选「自定义 OpenAI 兼容」填 baseUrl / 模型 / Key。</li>
       </ul>
-      <div class="hint">默认不预置任何 Key；各家免费额度与政策会调整，请以官网为准，模型名需与所选服务商一致。</div>
+      <div class="hint">各家免费额度与政策会调整，请以官网为准；模型名需与所选服务商一致。</div>
+    </div>
+    <div class="field"><label>模型配置（单选即生效；点名称展开编辑）</label>
+      <div id="set-models" class="model-list"></div>
+      <div id="set-model-add-panel" class="model-add-panel hidden">
+        <div class="row">
+          <select id="set-model-tpl" aria-label="厂商模板" title="选择厂商模板，自动带入 API 地址与默认模型名"></select>
+          <button type="button" id="set-model-doadd" style="flex:0 0 auto" title="按所选模板新增一条模型配置">添加</button>
+          <button type="button" id="set-model-cancel" style="flex:0 0 auto" title="收起添加面板">收起</button>
+        </div>
+        <div class="hint" id="set-model-tpl-preview"></div>
+      </div>
+      <button type="button" id="set-model-add" style="margin-top:6px">＋ 添加模型</button>
+      <div class="hint">点「＋ 添加模型」选厂商模板（或自定义），Key 请到上方推荐区申请。</div>
     </div>
     </section>
     <section class="set-sec" id="sec-adv">
-    <h4>高级</h4>
+    <h4>其他设置</h4>
     <div class="field" id="set-ghmirror-row"><label>
       <input type="checkbox" id="set-ghmirror-on"> 启用 GitHub 镜像 / 加速前缀
     </label>
@@ -2197,82 +2161,229 @@ function openSettings() {
 	};
 	ghmOn.addEventListener("change", syncGhm);
 	syncGhm();
-// API Key 小眼睛：显示=拉后端明文（回显的是掩码，真实 key 不下发到前端，
-	// 需要时按当前厂商现取）；隐藏=还原掩码。用户刚输入的新 key 本地就是明文，
-	// 直接切换显示即可。
-	const keyEye = m.querySelector("#set-apikey-eye");
-	if (keyEye) {
-		const keyInput = m.querySelector("#set-apikey");
-		let revealed = ""; // 点开期间暂存明文，隐藏时若未编辑则还原掩码
-		keyEye.addEventListener("click", async () => {
-			const showing = keyInput.type === "text";
-			if (showing) {
-				// → 隐藏：未编辑过就还原成掩码，避免明文留在 DOM
-				if (revealed && keyInput.value === revealed) keyInput.value = MASK_JS;
-				keyInput.type = "password";
-				keyEye.textContent = "👁";
-				keyEye.title = "显示 / 隐藏 API Key";
-				revealed = "";
-				return;
-			}
-			const cur = keyInput.value;
-			if (cur === MASK_JS) {
-				// 值是掩码：向后端取当前厂商的明文
-				keyEye.textContent = "…";
-				try {
-					const r = await api(
-						"/api/config/profiles/key?provider=" +
-							encodeURIComponent(provSel.value),
-					);
-					if (r.ok && r.key) {
-						revealed = r.key;
-						keyInput.value = r.key;
-					} else {
-						toast("尚未保存 API Key，无内容可显示");
-						return;
-					}
-				} catch (e) {
-					toast("读取 Key 失败：" + e.message, true);
-					return;
-				} finally {
-					keyEye.textContent = "🙈";
-					keyEye.title = "隐藏 API Key";
-				}
-				keyInput.type = "text";
-				keyEye.textContent = "🙈";
-				keyEye.title = "隐藏 API Key";
-			} else {
-				// 新输入的明文或空：直接切换显示
-				keyInput.type = "text";
-				keyEye.textContent = "🙈";
-				keyEye.title = "隐藏 API Key";
-			}
-		});
-	}
-	const provSel = m.querySelector("#set-provider");
-	provSel.value = api_.provider || "zhipu";
-	provSel.addEventListener("change", () => {
-		const p = PROVIDERS[provSel.value];
-		if (p) {
-			m.querySelector("#set-baseurl").value = p.baseUrl;
-			m.querySelector("#set-model").value = p.model;
+// ---- 模型条目：列表 + 单选生效 + 内联展开编辑（参考 zcode 的形态）----
+	const modelsEl = m.querySelector("#set-models");
+	const modelCfg = config.model || {};
+	let mEntries = (modelCfg.entries || []).map((e) => ({ ...e }));
+	let mActive = modelCfg.activeId || (mEntries[0] ? mEntries[0].id : "");
+	let mExpanded = mActive; // 默认展开当前生效条
+	const markModelDirty = () => {
+		modalDirty = true;
+		if (dirtyDot) dirtyDot.classList.remove("hidden");
+	};
+	// 同厂商新条目自动复用已有 key（掩码即可，保存时后端沿用旧密文）
+	const reuseKey = (baseUrl) => {
+		const same = mEntries.find((e) => e.baseUrl && e.baseUrl === baseUrl && e.apiKey);
+		return same ? MASK_JS : "";
+	};
+	const renderModels = () => {
+		// pi-lens-ignore: no-inner-html-js
+		modelsEl.innerHTML = "";
+		if (!mEntries.length) {
+			// pi-lens-ignore: no-inner-html-js
+			modelsEl.innerHTML = `<span class="hint">还没有模型，点下方「＋ 添加模型」新建一条。</span>`;
+			return;
 		}
-		// 各厂商 key 独立：切到厂商时回填它自己的 key（有则掩码、无则清空），
-		// 避免把上一个厂商的 key 串到新厂商上。
-		const ki = m.querySelector("#set-apikey");
-		if (ki) {
-			ki.value = savedKeys[provSel.value] || "";
-			// 掩码优先显示：后端回传的就是 MASK（有 key）/空串（无），
-			// 明文统一由小眼睛按需现取
-			if (ki.value && ki.value !== MASK_JS) ki.value = MASK_JS;
-			if (ki.type !== "password") ki.type = "password";
-			const eye = m.querySelector("#set-apikey-eye");
-			if (eye) {
+		for (const e of mEntries) {
+			const item = document.createElement("div");
+			item.className = "model-item" + (e.id === mActive ? " on" : "");
+			// ── 头部：单选 + 名称 + 模型 + key状态 + 删除 ──
+			const head = document.createElement("div");
+			head.className = "model-head";
+			const radio = document.createElement("input");
+			radio.type = "radio";
+			radio.name = "model-active";
+			radio.checked = e.id === mActive;
+			radio.title = "选中即生效";
+			radio.addEventListener("change", () => {
+				mActive = e.id;
+				markModelDirty();
+				renderModels();
+			});
+			const name = document.createElement("span");
+			name.className = "model-name";
+			name.textContent = `${e.name || "未命名"} · ${e.model || "?"}`;
+			name.title = `${e.baseUrl || ""} | key:${e.apiKey ? "已存" : "未填"}`;
+			name.addEventListener("click", () => {
+				mExpanded = mExpanded === e.id ? "" : e.id;
+				renderModels();
+			});
+			const del = document.createElement("button");
+			del.type = "button";
+			del.textContent = "✕";
+			del.title = "删除这条模型配置";
+			del.addEventListener("click", () => {
+				if (mEntries.length <= 1) {
+					toast("至少保留一条模型配置");
+					return;
+				}
+				mEntries = mEntries.filter((x) => x.id !== e.id);
+				if (mActive === e.id) mActive = mEntries[0].id;
+				if (mExpanded === e.id) mExpanded = "";
+				markModelDirty();
+				renderModels();
+			});
+			head.appendChild(radio);
+			head.appendChild(name);
+			head.appendChild(del);
+			item.appendChild(head);
+			// ── 内联编辑（仅展开条）──
+			if (mExpanded === e.id) {
+				const body = document.createElement("div");
+				body.className = "model-edit";
+				const mkField = (label, value, ph, inpTitle) => {
+					const f = document.createElement("div");
+					f.className = "field";
+					const lb = document.createElement("label");
+					lb.textContent = label;
+					const inp = document.createElement("input");
+					inp.type = "text";
+					inp.value = value;
+					inp.placeholder = ph || "";
+					if (inpTitle) inp.title = inpTitle;
+					inp.addEventListener("input", () => {
+						e[label === "名称" ? "name" : label === "API 地址" ? "baseUrl" : "model"] = inp.value;
+						markModelDirty();
+						name.textContent = `${e.name || "未命名"} · ${e.model || "?"}`;
+					});
+					f.appendChild(lb);
+					f.appendChild(inp);
+					return f;
+				};
+				body.appendChild(mkField("名称", e.name || "", "如：免费·智谱"));
+				body.appendChild(mkField("API 地址", e.baseUrl || "", "https://…/v1"));
+				body.appendChild(mkField("模型名", e.model || "", "glm-4-flash"));
+				// Key 行（带小眼睛）
+				const kf = document.createElement("div");
+				kf.className = "field";
+				const kl = document.createElement("label");
+				kl.textContent = "API Key";
+				const krow = document.createElement("div");
+				krow.className = "row";
+				const kin = document.createElement("input");
+				kin.type = "password";
+				kin.value = e.apiKey || "";
+				kin.autocomplete = "off";
+				kin.placeholder = "粘贴你在官网申请的 Key";
+				const eye = document.createElement("button");
+				eye.type = "button";
+				eye.className = "icon-btn";
+				eye.style.flex = "0 0 auto";
 				eye.textContent = "👁";
 				eye.title = "显示 / 隐藏 API Key";
+				let revealed = "";
+				eye.addEventListener("click", async () => {
+					if (kin.type === "text") {
+						if (revealed && kin.value === revealed) kin.value = MASK_JS;
+						kin.type = "password";
+						eye.textContent = "👁";
+						eye.title = "显示 / 隐藏 API Key";
+						revealed = "";
+						return;
+					}
+					if (kin.value === MASK_JS) {
+						try {
+							const r = await api(
+								"/api/config/modelkey?id=" + encodeURIComponent(e.id),
+							);
+							if (r.ok && r.key) {
+								revealed = r.key;
+								kin.value = r.key;
+							} else {
+								toast("该条目尚未保存 Key");
+								return;
+							}
+						} catch (err) {
+							toast("读取 Key 失败：" + err.message, true);
+							return;
+						}
+					}
+					kin.type = "text";
+					eye.textContent = "🙈";
+					eye.title = "隐藏 API Key";
+				});
+				kin.addEventListener("input", () => {
+					e.apiKey = kin.value; // 掩码=沿用旧密文（后端处理），明文/空=覆盖
+					markModelDirty();
+				});
+				krow.appendChild(kin);
+				krow.appendChild(eye);
+				kf.appendChild(kl);
+				kf.appendChild(krow);
+				body.appendChild(kf);
+				// 测试连接（针对本条目）
+				const tr = document.createElement("div");
+				tr.className = "row";
+				const tbtn = document.createElement("button");
+				tbtn.type = "button";
+				tbtn.textContent = "测试连接";
+				const tout = document.createElement("span");
+				tout.className = "hint";
+				tbtn.addEventListener("click", async () => {
+					tbtn.disabled = true;
+					tout.textContent = "测试中…";
+					try {
+						const r = await api("/api/config/test", {
+							id: e.id,
+							baseUrl: e.baseUrl || "",
+							apiKey: e.apiKey || "",
+							model: e.model || "",
+						});
+						tout.textContent = r.ok ? "✓ 连接成功" : "✗ " + r.error;
+					} catch (err) {
+						tout.textContent = "✗ " + err.message;
+					} finally {
+						tbtn.disabled = false;
+					}
+				});
+				tr.appendChild(tbtn);
+				tr.appendChild(tout);
+				body.appendChild(tr);
+				item.appendChild(body);
 			}
+			modelsEl.appendChild(item);
 		}
+	};
+	// 「＋ 添加模型」：展开面板，下拉选厂商模板 → 添加（无浏览器弹窗）
+	const addPanel = m.querySelector("#set-model-add-panel");
+	const tplSel = m.querySelector("#set-model-tpl");
+	const tplPreview = m.querySelector("#set-model-tpl-preview");
+	const syncTplPreview = () => {
+		const t = MODEL_TEMPLATES[parseInt(tplSel.value, 10)] || MODEL_TEMPLATES[0];
+		tplPreview.textContent = t.baseUrl
+			? `将带入：${t.baseUrl} · ${t.model}（Key 需自行申请后填入）`
+			: "自定义：添加后手动填 API 地址与模型名";
+	};
+	tplSel.innerHTML = MODEL_TEMPLATES.map(
+		(t, i) => `<option value="${i}">${t.name}</option>`,
+	).join("");
+	tplSel.addEventListener("change", syncTplPreview);
+	syncTplPreview();
+	m.querySelector("#set-model-add").addEventListener("click", () => {
+		addPanel.classList.toggle("hidden");
+		if (!addPanel.classList.contains("hidden")) tplSel.focus();
 	});
+	m.querySelector("#set-model-cancel").addEventListener("click", () => {
+		addPanel.classList.add("hidden");
+	});
+	m.querySelector("#set-model-doadd").addEventListener("click", () => {
+		const t = MODEL_TEMPLATES[parseInt(tplSel.value, 10)] || MODEL_TEMPLATES[0];
+		const nid = "m" + Date.now().toString(36);
+		mEntries.push({
+			id: nid,
+			name: t.name,
+			baseUrl: t.baseUrl,
+			model: t.model,
+			apiKey: reuseKey(t.baseUrl), // 同地址已有 key → 自动复用
+		});
+		mActive = nid;
+		mExpanded = nid;
+		markModelDirty();
+		renderModels();
+		addPanel.classList.add("hidden");
+		toast(`已添加「${t.name}」，填好 Key 后保存生效`);
+	});
+	renderModels();
 
 	// 黑名单：.gitignore 风格文本编辑（每行一条，支持 # 注释与 * 通配符）
 	const blArea = m.querySelector("#set-blacklist");
@@ -2300,90 +2411,6 @@ function openSettings() {
 			btn.textContent = label;
 		}
 	});
-
-	// ---- 多套模型配置库：列表 / 存为当前 / 启用 / 删除 ----
-	const profilesEl = m.querySelector("#set-profiles");
-	const profNameInput = m.querySelector("#set-profile-name");
-	let profiles = (config.apiProfiles || []).map((p) => ({ ...p }));
-	let activeProfileId = ""; // 本次会话中启用的套（保存时提交）
-	const provLabel = (k) => (PROVIDERS[k] ? PROVIDERS[k].label.split("（")[0] : k || "自定义");
-	const renderProfiles = () => {
-		// pi-lens-ignore: no-inner-html-js
-		profilesEl.innerHTML = "";
-		if (!profiles.length) {
-			// pi-lens-ignore: no-inner-html-js
-			profilesEl.innerHTML = `<span class="hint">暂无已存配置；填好下方表单后点「＋ 存为当前」。</span>`;
-			return;
-		}
-		for (const p of profiles) {
-			const row = document.createElement("div");
-			row.className = "profile-row" + (p.id === activeProfileId ? " on" : "");
-			const info = document.createElement("span");
-			info.className = "profile-info";
-			info.textContent = `${p.name} · ${provLabel(p.provider)} · ${p.model || "?"}`;
-			info.title = `${p.provider} | ${p.baseUrl} | key:${p.apiKey ? "已存" : "无"}`;
-			const btnUse = document.createElement("button");
-			btnUse.textContent = p.id === activeProfileId ? "✓ 当前" : "启用";
-			btnUse.disabled = p.id === activeProfileId;
-			btnUse.title = "把这套配置填入下方表单并作为当前生效（需保存）";
-			btnUse.addEventListener("click", () => {
-				activeProfileId = p.id;
-				// 表单回填该套
-				provSel.value = p.provider in PROVIDERS ? p.provider : "custom";
-				m.querySelector("#set-baseurl").value = p.baseUrl || "";
-				m.querySelector("#set-model").value = p.model || "";
-				const ki = m.querySelector("#set-apikey");
-				ki.value = p.apiKey ? MASK_JS : "";
-				if (ki.type !== "password") ki.type = "password";
-				const eye2 = m.querySelector("#set-apikey-eye");
-				if (eye2) {
-					eye2.textContent = "👁";
-					eye2.title = "显示 / 隐藏 API Key";
-				}
-				modalDirty = true;
-				if (dirtyDot) dirtyDot.classList.remove("hidden");
-				renderProfiles();
-			});
-			const btnDel = document.createElement("button");
-			btnDel.textContent = "✕";
-			btnDel.title = "删除这套配置";
-			btnDel.addEventListener("click", () => {
-				profiles = profiles.filter((x) => x.id !== p.id);
-				if (activeProfileId === p.id) activeProfileId = "";
-				modalDirty = true;
-				if (dirtyDot) dirtyDot.classList.remove("hidden");
-				renderProfiles();
-			});
-			row.appendChild(info);
-			row.appendChild(btnUse);
-			row.appendChild(btnDel);
-			profilesEl.appendChild(row);
-		}
-	};
-	m.querySelector("#set-profile-add").addEventListener("click", () => {
-		const name = (profNameInput.value || "").trim();
-		if (!name) {
-			toast("请先给新配置起个名字");
-			profNameInput.focus();
-			return;
-		}
-		const pid = "p" + Date.now().toString(36);
-		profiles.push({
-			id: pid,
-			name,
-			provider: provSel.value,
-			baseUrl: m.querySelector("#set-baseurl").value.trim(),
-			model: m.querySelector("#set-model").value.trim(),
-			apiKey: m.querySelector("#set-apikey").value, // 掩码=沿用旧值（后端处理）
-		});
-		activeProfileId = pid;
-		profNameInput.value = "";
-		modalDirty = true;
-		if (dirtyDot) dirtyDot.classList.remove("hidden");
-		renderProfiles();
-		toast(`已加入配置库：「${name}」（保存后生效）`);
-	});
-	renderProfiles();
 
 	// 扫描根目录：多选，路径由后端在本机弹出文件夹对话框后回传
 	const rootsEl = m.querySelector("#set-roots-tags");
@@ -2507,23 +2534,6 @@ function openSettings() {
 	updateRestore();
 	renderExcluded();
 
-	// 测试连接
-	m.querySelector("#set-test").addEventListener("click", async () => {
-		const out = m.querySelector("#set-test-result");
-		out.textContent = "测试中…";
-		try {
-			const r = await api("/api/config/test", {
-				provider: provSel.value, // 掩码时后端按该厂商的历史 key 测试
-				baseUrl: m.querySelector("#set-baseurl").value.trim(),
-				apiKey: m.querySelector("#set-apikey").value,
-				model: m.querySelector("#set-model").value.trim(),
-			});
-			out.textContent = r.ok ? `✓ 连接成功` : "✗ " + r.error;
-		} catch (e) {
-			out.textContent = "✗ " + e.message;
-		}
-	});
-
 	m.querySelector("#set-cancel").addEventListener("click", () => {
 		if (modalDirty && !confirm("有未保存的修改，确定关闭？")) return;
 		closeModal();
@@ -2537,16 +2547,18 @@ function openSettings() {
 				.map((s) => s.trim().replace(/\/+$/, ""))
 				.filter((s) => s && !s.startsWith("#"))
 				.filter((v, i, arr) => arr.findIndex((x) => x === v) === i),
-api: {
-					provider: provSel.value,
-					baseUrl: m.querySelector("#set-baseurl").value.trim(),
-					apiKey: m.querySelector("#set-apikey").value,
-					model: m.querySelector("#set-model").value.trim(),
+// 模型配置：条目列表 + 选中即生效（key 为掩码时后端沿用旧密文）
+				model: {
+					entries: mEntries.map((e) => ({
+						id: e.id,
+						name: e.name || "",
+						baseUrl: e.baseUrl || "",
+						model: e.model || "",
+						apiKey: e.apiKey || "",
+					})),
+					activeId: mActive,
 				},
-				// 多套模型配置库：key 为掩码时后端沿用旧密文
-				apiProfiles: profiles,
-				activeProfileId: activeProfileId || undefined,
-			editor: {
+				editor: {
 				name: m.querySelector("#set-edname").value.trim() || "编辑器",
 				cmd: m.querySelector("#set-edcmd").value.trim(),
 			},
@@ -2562,11 +2574,10 @@ api: {
 try {
 			const r = await api("/api/config", { config: cfg });
 			config = r.config;
-			// 配置库以后端落库结果为准（id/密文由后端规范），避免连续保存重复建套
-			if (Array.isArray(config.apiProfiles)) {
-				profiles = config.apiProfiles.map((p) => ({ ...p }));
-				if (!activeProfileId)
-					activeProfileId = "";
+			// 模型条目以后端落库结果为准（掩码/密文由后端规范）
+			if (config.model && Array.isArray(config.model.entries)) {
+				mEntries = config.model.entries.map((e) => ({ ...e }));
+				mActive = config.model.activeId || mEntries[0]?.id || "";
 			}
 			applyTheme();
 			modalDirty = false;
@@ -2767,6 +2778,15 @@ function renderAIBlock(text) {
 		}
 		if (bullet) {
 			html += `<li>${escHtml(ln.slice(2))}</li>`;
+		} else if (
+			ln.startsWith("功能：") ||
+			ln.startsWith("架构：") ||
+			ln.startsWith("场景：")
+		) {
+			// 导读小节标题（新格式）：accent 强调，后跟说明文字
+			const [k, ...rest] = ln.split("：");
+			const tail = rest.join("：").trim();
+			html += `<div class='ai-sec'><b>${esc(k)}</b>${tail ? " · " + esc(tail) : ""}</div>`;
 		} else if (ln.startsWith("适合：") || ln.startsWith("上手：")) {
 			const [k, ...rest] = ln.split("：");
 			html += `<div class='ai-kv'><span class='ai-k'>${esc(k)}</span>${escHtml(rest.join("："))}</div>`;

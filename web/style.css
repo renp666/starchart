@@ -863,38 +863,79 @@ main {
 .blacklist-ops {
 	margin-top: 6px;
 }
-/* 多套模型配置库：紧凑行列表，当前生效套高亮 */
-.profiles-list {
+/* 模型条目：单选即生效的列表；当前生效条 accent 高亮，展开条内联编辑 */
+.model-list {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
-	max-height: 150px;
+	gap: 6px;
+	max-height: 340px;
 	overflow: auto;
 }
-.profile-row {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	font-size: 12px;
-	padding: 5px 8px;
+.model-item {
 	border: 1px solid var(--border);
-	border-radius: 6px;
+	border-radius: 8px;
 	background: var(--bg3);
+	overflow: hidden;
 }
-.profile-row.on {
+.model-item.on {
 	border-color: var(--accent);
 	background: var(--accent-soft);
 }
-.profile-info {
+.model-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 7px 10px;
+	font-size: 12.5px;
+	cursor: pointer;
+}
+.model-head input[type="radio"] {
+	accent-color: var(--accent);
+	flex: 0 0 auto;
+	margin: 0;
+	cursor: pointer;
+}
+.model-name {
 	flex: 1;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	font-weight: 600;
+	color: var(--text);
 }
-.profile-row button {
+.model-head button {
 	flex: 0 0 auto;
 	font-size: 11px;
 	padding: 2px 8px;
+	border: none;
+	background: none;
+	color: var(--text-dim);
+}
+.model-head button:hover {
+	color: var(--bad);
+}
+.model-edit {
+	padding: 4px 12px 12px;
+	border-top: 1px solid var(--border);
+	background: var(--bg2);
+}
+.model-edit .field {
+	margin-bottom: 8px;
+}
+/* 添加模型：行内下拉面板（不弹浏览器窗口） */
+.model-add-panel {
+	margin-top: 6px;
+	padding: 8px 10px;
+	border: 1px dashed var(--border);
+	border-radius: 8px;
+	background: var(--bg2);
+}
+.model-add-panel.hidden {
+	display: none;
+}
+.model-add-panel select {
+	flex: 1 1 auto;
+	min-width: 0;
 }
 .free-models {
 	margin: 2px 0 4px;
@@ -1964,6 +2005,20 @@ main {
 }
 .ai-kv {
 	margin: 6px 0;
+}
+/* 导读小节标题（功能/架构/场景）：比 KV 更醒目的分节点 */
+.ai-sec {
+	margin: 10px 0 2px;
+	font-size: 12px;
+	font-weight: 650;
+	color: var(--accent);
+	letter-spacing: 0.03em;
+}
+.ai-sec b {
+	padding: 1px 8px;
+	background: var(--accent-soft);
+	border-radius: 5px;
+	margin-right: 2px;
 }
 .ai-kv .ai-k {
 	display: inline-block;

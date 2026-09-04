@@ -189,11 +189,10 @@ def default_config():
             "baseUrl": "",
             "apiKey": "",
             "model": "",
-            "apiKeys": {},
         },
-        # 多套模型配置库：[{id,name,provider,baseUrl,model,apiKey(密文)}]；
-        # 「当前生效」仍是 config.api，切换=把所选套写入 api，所有调用方零改动。
-        "apiProfiles": [],
+        # 模型配置（参考 zcode）：一个条目列表 + 选中即生效；无预置 key，
+        # 用户自行申请填写。条目 = {id,name,baseUrl,apiKey(密文),model}
+        "model": {"entries": [], "activeId": ""},
         "editor": {"name": "VS Code", "cmd": 'code "{path}"'},
         "backupDir": "",
         "theme": "auto",
@@ -202,6 +201,97 @@ def default_config():
         "ghToken": "",  # GitHub Token（可选）：填了可提高 api.github.com 限流额度
         "ghMirror": "",  # GitHub 镜像/加速前缀（可选）：ghproxy 类加速站，直连失败时用它重试；被墙 / raw 取不到 README 时填入
     }
+
+
+def _migrate_model_config():
+    """旧三轨（config.api + api.apiKeys + apiProfiles）→ 新单轨 config.model。
+
+    新结构参考 zcode：entries 条目列表 + activeId 选中即生效；config.api 保留为
+    「当前生效」的镜像（由 active entry 同步），AI 调用方零改动。
+    迁移只增不删：旧字段（api/apiKeys/apiProfiles）原样保留在文件里，
+    万一要回退，删除 config.model 字段重启即回到旧逻辑——无需备份文件。
+    """
+    m = _config.get("model")
+    if isinstance(m, dict) and isinstance(m.get("entries"), list) and m["entries"]:
+        _sync_api_from_model()
+        return
+    api = _config.get("api") if isinstance(_config.get("api"), dict) else {}
+    apikeys = api.get("apiKeys") if isinstance(api.get("apiKeys"), dict) else {}
+    entries = []
+    # 1) 配置库条目（最完整）直接转
+    for p in _config.get("apiProfiles") or []:
+        if not isinstance(p, dict):
+            continue
+        k = p.get("apiKey", "")
+        entries.append(
+            {
+                "id": str(p.get("id") or "m%d" % (len(entries) + 1)),
+                "name": str(p.get("name") or "模型 %d" % (len(entries) + 1)),
+                "baseUrl": str(p.get("baseUrl") or ""),
+                "model": str(p.get("model") or ""),
+                "apiKey": k if k and k != MASK else "",
+            }
+        )
+    # 2) 当前生效 api → 一条（与已有条目重复则跳过）
+    cur_key = api.get("apiKey", "")
+    if not any(
+        e["baseUrl"] == api.get("baseUrl", "") and e["model"] == api.get("model", "")
+        for e in entries
+    ) and (
+        api.get("baseUrl") or api.get("model") or (cur_key and cur_key != MASK)
+    ):
+        entries.append(
+            {
+                "id": "main",
+                "name": "默认（%s）" % (api.get("provider") or "自定义"),
+                "baseUrl": api.get("baseUrl", ""),
+                "model": api.get("model", ""),
+                "apiKey": cur_key if cur_key and cur_key != MASK else "",
+            }
+        )
+    # 3) apiKeys 里未被条目引用的厂商 key：丢弃（PRD 决策）
+    _ = apikeys
+    # 无任何条目 → 初始化一条智谱免费默认（无 key，用户自行申请）
+    if not entries:
+        entries = [
+            {
+                "id": "zhipu",
+                "name": "智谱（免费）",
+                "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+                "model": "glm-4-flash",
+                "apiKey": "",
+            }
+        ]
+    active = "main" if any(e["id"] == "main" for e in entries) else entries[0]["id"]
+    _config["model"] = {"entries": entries, "activeId": active}
+    log(
+        "模型配置已迁移为新结构（%d 条，选中 %s）；旧字段保留未删，如需回退删 model 字段"
+        % (len(entries), active)
+    )
+    _sync_api_from_model()  # 迁移后立刻让 config.api 镜像选中条目
+    save_config()
+
+
+def _sync_api_from_model():
+    """把选中的模型条目同步为 config.api（AI 调用方零改动）。"""
+    m = _config.get("model") or {}
+    entries = m.get("entries") or []
+    active = None
+    for e in entries:
+        if e.get("id") == m.get("activeId"):
+            active = e
+            break
+    if active is None:
+        active = entries[0] if entries else None
+        if active:
+            _config["model"]["activeId"] = active["id"]
+    if active:
+        _config["api"] = {
+            "provider": active.get("id", "custom"),
+            "baseUrl": active.get("baseUrl", ""),
+            "apiKey": active.get("apiKey", ""),
+            "model": active.get("model", ""),
+        }
 
 
 def load_config():
@@ -233,37 +323,16 @@ def load_config():
                 ):
                     _config["editor"] = {"name": "VS Code", "cmd": 'code "{path}"'}
                     save_config()
-                # 结构兜底：旧版/手改过的 config 里 api/editor 可能缺失或非对象，
-                # 而设置保存路径会直接写 cfg["api"][...]，缺了这个 dict 会整页报错。
+                # 结构兜底：旧版/手改过的 config 里 api 可能缺失，补一个空对象
                 if not isinstance(_config.get("api"), dict):
-                    _config["api"] = {"provider": "zhipu", "baseUrl": "", "apiKey": "", "model": ""}
-                # API key 按厂商分别记忆：切换服务商不互相串 key。
-                # 首次加载时把旧的单一 key 归档到当前厂商名下。
-                _api = _config["api"]
-                if not isinstance(_api.get("apiKeys"), dict):
-                    _api["apiKeys"] = {}
-                _prov = str(_api.get("provider") or "custom")
-                _curkey = _api.get("apiKey") or ""
-                if _curkey and not _api["apiKeys"].get(_prov) and _curkey != MASK:
-                    _api["apiKeys"][_prov] = _curkey
-                # 多套配置库结构兜底；旧配置首载时把当前生效配置收编为第一套
-                if not isinstance(_config.get("apiProfiles"), list):
-                    _config["apiProfiles"] = []
-                if not _config["apiProfiles"]:
-                    _config["apiProfiles"] = [
-                        {
-                            "id": "p1",
-                            "name": "默认（%s）" % (_prov or "custom"),
-                            "provider": _prov,
-                            "baseUrl": _api.get("baseUrl", ""),
-                            "model": _api.get("model", ""),
-                            "apiKey": _curkey if _curkey != MASK else "",
-                        }
-                    ]
+                    _config["api"] = {"provider": "custom", "baseUrl": "", "apiKey": "", "model": ""}
                 if not isinstance(_config.get("editor"), dict):
                     _config["editor"] = {"name": "VS Code", "cmd": 'code "{path}"'}
                 if _config.get("theme") not in ("dark", "light", "auto"):
                     _config["theme"] = "auto"
+            # 模型配置：全新安装与旧三轨统一在这里初始化/迁移
+            # （entries + activeId，选中即生效），并同步 config.api 镜像
+            _migrate_model_config()
         return _config
 
 
@@ -1728,7 +1797,7 @@ GH_UA = (
 TREND_FILE = os.path.join(DATA_DIR, "trending.json")
 TREND_TTL = 30 * 60  # 榜单缓存 30 分钟，避免每次开面板都打一次 GitHub
 TREND_TIMEOUT = 25  # 单次网络请求超时（秒）
-TREND_README_LIMIT = 4000  # 送进 LLM 的 README 截断长度
+TREND_README_LIMIT = 8000  # 送进 LLM 的 README 截断长度（导读需要功能/架构细节）
 GH_NAME_RE = re.compile(
     r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
 )  # 只认 owner/repo，防任意 URL 拼接
@@ -2175,11 +2244,18 @@ def _clean_guide(text):
 
 
 def trend_guide(full_name, desc=""):
-    """中文导读（探索）：一句话 + 核心要点 + 适合谁 + 上手建议。结果长期缓存。"""
+    """中文导读：项目定位 + 功能 + 架构 + 场景 + 上手（参考 zread 的内容框架）。
+    结果长期缓存；升级提示词版本号让旧缓存自然失效重生成。"""
+    GUIDE_PROMPT_VERSION = 2
     with _trend_lock:
         store = _trend_load()
         hit = store["guides"].get(full_name)
-        if hit and hit.get("text"):
+        # 命中校验版本：提示词升级后旧格式缓存作废，自动重新生成
+        if (
+            hit
+            and hit.get("text")
+            and hit.get("v") == GUIDE_PROMPT_VERSION
+        ):
             return {"ok": True, "text": hit["text"], "cached": True}
     readme, meta = gh_readme(full_name)
     topics = meta.get("topics") or []
@@ -2196,15 +2272,26 @@ def trend_guide(full_name, desc=""):
         )
     )
     text = llm_chat(
-        "你是一个中文开源项目导读助手。严格按下述纯文本格式输出，不要 Markdown 标题符号、不要编号、"
-        "不要客套话、不要重复项目名：\n"
-        "第 1 行：用一句话说清这个项目是什么、解决什么问题（≤30 字，不加任何前缀）。\n"
-        "第 2-4 行：恰好 3 个核心要点，每行以 '- ' 开头，每条 ≤25 字，只说干货事实，不要凑数。\n"
-        "第 5 行：以「适合：」开头，说明适合谁用（≤30 字）。\n"
-        "第 6 行：以「上手：」开头，给出最省事的上手/安装方式（≤45 字）；其中任何命令或包名一律用反引号包裹，如 `pip install x`。\n"
-        "严格只输出这 6 行。",
+        "你是一位资深开源项目导读作者，为中文读者写 GitHub 项目导读。你的读者是"
+        "想快速判断「这个项目值不值得花时间」的开发者，所以内容要有实感、能落地，"
+        "而不是空洞的形容词堆砌。\n"
+        "严格按下面的纯文本格式输出（不要 Markdown 标题符号、不要数字编号、"
+        "不要客套话、不要重复项目名）：\n"
+        "第 1 行：用一句话说清这个项目是什么、解决什么问题（≤35 字，不加前缀）。\n"
+        "接下来输出「功能：」行，然后 3-5 行以 '- ' 开头的核心功能点，每条说清"
+        "「它做什么 + 有什么独特之处」（≤35 字），来自 README 的真实功能而非泛泛描述；"
+        "README 信息不足以凑满 3 条就少写，不要编造。\n"
+        "接着输出「架构：」行，用 1-3 行通俗说明项目的技术架构或实现思路——"
+        "用了什么语言/框架/关键依赖、代码怎么组织的、有什么值得注意的设计决策"
+        "（每行 ≤45 字，写不出实质内容就整体省略这一节）。\n"
+        "接着输出「场景：」行，1-2 行说明典型的使用场景与目标用户，"
+        "「谁在什么情况下会用到它、用来替代什么」（≤40 字）。\n"
+        "最后输出「上手：」行，给出最省事的安装/试用路径（≤60 字）；"
+        "命令或包名一律用反引号包裹，如 `pip install x`。\n"
+        "「功能：」「架构：」「场景：」「上手：」这类行内词后跟内容，如「功能：核心能力如下」。",
         user,
-        max_tokens=500,
+        max_tokens=1200,
+        temperature=0.4,
     )
     if not text:
         return {
@@ -2214,7 +2301,11 @@ def trend_guide(full_name, desc=""):
     text = _clean_guide(text)
     with _trend_lock:
         store = _trend_load()
-        store["guides"][full_name] = {"text": text, "at": time.time()}
+        store["guides"][full_name] = {
+            "text": text,
+            "at": time.time(),
+            "v": GUIDE_PROMPT_VERSION,
+        }
         _trend_save(store)
     return {"ok": True, "text": text, "cached": False}
 
@@ -2392,19 +2483,17 @@ def mask_config(cfg):
     # pi-lens-ignore: unchecked-throwing-call-python
     out = json.loads(json.dumps(cfg))
     if out.get("api"):
-        api = out["api"]
-        if api.get("apiKey"):
-            api["apiKey"] = MASK
-        # 按厂商回传 key 是否存在：有则掩码、无则空串，便于前端切换厂商时回填。
-        keys = api.get("apiKeys")
-        if isinstance(keys, dict):
-            api["apiKeys"] = {k: (MASK if v else "") for k, v in keys.items()}
-    # 配置库：每套的 key 也掩码（有=********，无=""）
-    profs = out.get("apiProfiles")
-    if isinstance(profs, list):
-        for p in profs:
-            if isinstance(p, dict):
-                p["apiKey"] = MASK if p.get("apiKey") else ""
+        # 当前生效镜像：key 一律掩码
+        if out["api"].get("apiKey"):
+            out["api"]["apiKey"] = MASK
+        out["api"].pop("apiKeys", None)
+    out.pop("apiProfiles", None)  # 旧字段已迁移，不再回传前端
+    # 模型条目：key 有=掩码、无=空串
+    m = out.get("model")
+    if isinstance(m, dict) and isinstance(m.get("entries"), list):
+        for e in m["entries"]:
+            if isinstance(e, dict):
+                e["apiKey"] = MASK if e.get("apiKey") else ""
     return out
 
 
@@ -2568,35 +2657,30 @@ class Handler(BaseHTTPRequestHandler):
             c = mask_config(load_config())
             c["autostart"] = autostart_status()
             return self._json({"ok": True, "config": c})
-        if path == "/api/config/profiles":
-            # 多套模型配置库：回传各套配置（key 掩码）
-            cfg = load_config()
-            profs = cfg.get("apiProfiles") or []
-            return self._json(
-                {
-                    "ok": True,
-                    "profiles": profs,
-                    "active": cfg.get("api", {}).get("provider", ""),
-                    "profilesError": None,
-                }
-            )
-        if path == "/api/config/profiles/key":
-            # 查看明文 key：仅限本机请求（_origin_ok 已拦跨站），供设置页小眼睛。
-            # 参数 id=配置库中某一套；provider=当前设置页所选厂商（未传则当前生效配置）。
+        if path == "/api/config/modelkey":
+            # 查看某模型条目的明文 key：仅限本机请求（_origin_ok 已拦跨站），
+            # 供设置页小眼睛按需查看。id=条目 id，缺省=当前生效条目。
             qs = parse_qs(urlparse(self.path).query)
-            pid = (qs.get("id") or [""])[0]
-            prov = (qs.get("provider") or [""])[0]
+            eid = (qs.get("id") or [""])[0]
             cfg = load_config()
-            if pid:
-                for p in cfg.get("apiProfiles") or []:
-                    if p.get("id") == pid:
-                        return self._json({"ok": True, "key": api_key(dict(cfg, api={"apiKey": p.get("apiKey", "")}))})
-                return self._json({"ok": True, "key": ""})
-            if prov:
-                # 按厂商的历史存档取（设置页切换厂商未保存时的预览）
-                k = (cfg.get("api", {}).get("apiKeys") or {}).get(prov, "")
-                return self._json({"ok": True, "key": api_key(dict(cfg, api={"apiKey": k}))})
-            return self._json({"ok": True, "key": api_key(cfg)})
+            entries = (cfg.get("model") or {}).get("entries") or []
+            ent = None
+            for e in entries:
+                if e.get("id") == eid:
+                    ent = e
+                    break
+            if ent is None:
+                # 未指定/未命中：当前生效条目
+                if eid:
+                    return self._json({"ok": True, "key": ""})
+                ent = next(
+                    (e for e in entries if e.get("id") == cfg["model"].get("activeId")),
+                    None,
+                )
+            key = (ent or {}).get("apiKey", "")
+            return self._json(
+                {"ok": True, "key": api_key(dict(cfg, api={"apiKey": key}))}
+            )
         if path == "/api/doc":
             qs = parse_qs(urlparse(self.path).query)
             real = path_allowed(qs.get("path", [""])[0])
@@ -2910,68 +2994,41 @@ class Handler(BaseHTTPRequestHandler):
                             cfg[key] = body[key]
                     if body.get("theme") in ("dark", "light", "auto"):
                         cfg["theme"] = body["theme"]
-                    if "api" in body:
-                        newapi = body["api"]
-                        for k in ("provider", "baseUrl", "model"):
-                            if k in newapi:
-                                cfg["api"][k] = newapi[k]
-                        prov = str(cfg["api"].get("provider") or "custom")
-                        apiKeys = cfg["api"].setdefault("apiKeys", {})
-                        key = newapi.get("apiKey", "")
-                        if key and key != MASK:
-                            # 输入了新 key：加密并写入该厂商的存档与当前生效位。
-                            enc = encrypt_api_key(key)
-                            apiKeys[prov] = enc
-                            cfg["api"]["apiKey"] = enc
-                        else:
-                            # 未改（掩码）或显式清空：当前厂商沿用/清空其历史存档。
-                            if key == "":
-                                saved = ""
-                            else:
-                                saved = apiKeys.get(prov) or cfg["api"].get("apiKey") or ""
-                            apiKeys[prov] = saved
-                            cfg["api"]["apiKey"] = saved
-                    # ---- 多套模型配置库 ----
-                    if isinstance(body.get("apiProfiles"), list):
-                        old = {p.get("id"): p.get("apiKey", "") for p in cfg.get("apiProfiles") or []}
-                        profs = []
-                        for i, p in enumerate(body["apiProfiles"]):
-                            if not isinstance(p, dict):
+                    # ---- 模型配置（单轨）：entries + activeId，选中即生效 ----
+                    if isinstance(body.get("model"), dict):
+                        old_keys = {
+                            e.get("id"): e.get("apiKey", "")
+                            for e in (cfg.get("model") or {}).get("entries") or []
+                        }
+                        entries = []
+                        for i, e in enumerate(body["model"].get("entries") or []):
+                            if not isinstance(e, dict):
                                 continue
-                            pid = str(p.get("id") or f"p{i+1}")
-                            k = p.get("apiKey", "")
+                            eid = str(e.get("id") or "m%d" % (i + 1))
+                            k = e.get("apiKey", "")
                             if k and k != MASK:
-                                k = encrypt_api_key(k)
+                                k = encrypt_api_key(k)  # 新输入的明文 → 加密
                             else:
                                 # 掩码=沿用旧密文；空串=清空
-                                k = old.get(pid) if k == MASK else ""
-                            profs.append(
+                                k = old_keys.get(eid) if k == MASK else ""
+                            entries.append(
                                 {
-                                    "id": pid,
-                                    "name": str(p.get("name") or f"配置 {i+1}"),
-                                    "provider": str(p.get("provider") or "custom"),
-                                    "baseUrl": str(p.get("baseUrl") or ""),
-                                    "model": str(p.get("model") or ""),
+                                    "id": eid,
+                                    "name": str(e.get("name") or "模型 %d" % (i + 1)),
+                                    "baseUrl": str(e.get("baseUrl") or ""),
+                                    "model": str(e.get("model") or ""),
                                     "apiKey": k,
                                 }
                             )
-                        cfg["apiProfiles"] = profs
-                    # activeProfileId：把所选套的内容写入当前生效 api（切换动作）
-                    act = str(body.get("activeProfileId") or "")
-                    if act:
-                        for p in cfg.get("apiProfiles") or []:
-                            if p.get("id") == act:
-                                cfg["api"].update(
-                                    {
-                                        "provider": p["provider"],
-                                        "baseUrl": p["baseUrl"],
-                                        "model": p["model"],
-                                        "apiKey": p["apiKey"],
-                                    }
-                                )
-                                _pv = p["provider"]
-                                cfg["api"].setdefault("apiKeys", {})[_pv] = p["apiKey"]
-                                break
+                        if not entries:
+                            return self._json(
+                                {"ok": False, "error": "至少保留一条模型配置"}
+                            )
+                        aid = str(body["model"].get("activeId") or "")
+                        if not any(e["id"] == aid for e in entries):
+                            aid = entries[0]["id"]
+                        cfg["model"] = {"entries": entries, "activeId": aid}
+                        _sync_api_from_model()  # 选中的条目 → config.api 镜像
                     save_config()
                 autostart_err = None
                 if "autostart" in body:
@@ -2985,10 +3042,17 @@ class Handler(BaseHTTPRequestHandler):
                 body = self._body_json()
                 api = dict(body)
                 if api.get("apiKey") == MASK:
-                    # 掩码=用已存的 key：优先按表单所选厂商的历史存档，其次当前生效
-                    prov = (api.get("provider") or "").strip()
-                    saved = (load_config().get("api", {}).get("apiKeys") or {}).get(prov, "")
-                    api["apiKey"] = api_key(dict(load_config(), api={"apiKey": saved})) if saved else api_key()
+                    # 掩码=用该条目已存的 key（id 指定；缺省=当前生效）
+                    cfg = load_config()
+                    entries = (cfg.get("model") or {}).get("entries") or []
+                    ent = next((e for e in entries if e.get("id") == api.get("id")), None)
+                    if ent is None:
+                        ent = next(
+                            (e for e in entries if e.get("id") == cfg["model"].get("activeId")),
+                            None,
+                        )
+                    saved = (ent or {}).get("apiKey", "")
+                    api["apiKey"] = api_key(dict(cfg, api={"apiKey": saved})) if saved else ""
                 if not (api.get("baseUrl") and api.get("model")):
                     return self._json({"ok": False, "error": "请填写 baseUrl 和模型名"})
                 text = _test_api(api)
