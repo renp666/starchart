@@ -128,18 +128,10 @@
               stroke-width="1.4"
               fill="none"
               stroke-linecap="round"
+              stroke-linejoin="round"
             >
-              <path d="M4 6h16M4 12h16M4 18h16" />
-            </g>
-            <g fill="var(--bg3)">
-              <circle cx="9" cy="6" r="2.4" />
-              <circle cx="15" cy="12" r="2.4" />
-              <circle cx="7" cy="18" r="2.4" />
-            </g>
-            <g fill="none" stroke="currentColor" stroke-width="1.4">
-              <circle cx="9" cy="6" r="2.4" />
-              <circle cx="15" cy="12" r="2.4" />
-              <circle cx="7" cy="18" r="2.4" />
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </g>
           </svg>
         </button>
@@ -243,13 +235,13 @@
 
         <div class="tr-toolbar" role="group" aria-label="筛选与拉取">
           <div class="seg" id="tr-since" role="group" aria-label="趋势时段">
-            <button data-since="daily" class="on" aria-pressed="true">
+            <button data-since="daily" class="on" aria-pressed="true" title="近 24 小时趋势">
               今日
             </button>
-            <button data-since="weekly" aria-pressed="false">本周</button>
-            <button data-since="monthly" aria-pressed="false">本月</button>
+            <button data-since="weekly" aria-pressed="false" title="近 7 天趋势">本周</button>
+            <button data-since="monthly" aria-pressed="false" title="近 30 天趋势">本月</button>
           </div>
-          <select id="tr-lang" aria-label="语言">
+          <select id="tr-lang" aria-label="语言" title="按编程语言筛选榜单">
             <option value="">全部语言</option>
           </select>
           <span class="tr-grow"></span>
@@ -270,8 +262,8 @@
         </div>
 
         <div class="tr-toolbar tr-ai" role="group" aria-label="AI 解读">
-          <button id="tr-all">✨ 全部生成</button>
-          <button id="tr-digest">📋 本期速览</button>
+          <button id="tr-all" title="为当前榜单全部项目生成中文一句话介绍">✨ 全部生成</button>
+          <button id="tr-digest" title="用 LLM 生成本期榜单速览">📋 本期速览</button>
           <span class="tr-sep"></span>
           <input
             type="text"
@@ -279,7 +271,7 @@
             aria-label="解析任意仓库"
             placeholder="任意仓库：owner/repo 或 GitHub 链接"
           />
-          <button id="tr-adhoc-go">📖 导读</button>
+          <button id="tr-adhoc-go" title="解析任意仓库并生成中文项目导读">📖 导读</button>
         </div>
 
         <div class="trend-main">
@@ -294,7 +286,7 @@
           >
             <div class="tp-bar"><div id="tr-progress-fill"></div></div>
             <span id="tr-progress-text" class="hint"></span>
-            <button id="tr-stop">停止</button>
+            <button id="tr-stop" title="停止正在进行的批量生成">停止</button>
           </div>
           <div id="tr-list" class="trend-list" aria-live="polite"></div>
         </div>
@@ -302,7 +294,6 @@
         <div id="tr-drawer-mask" class="hidden"></div>
         <aside id="tr-rail" class="tr-drawer" aria-label="AI 阅读栏">
           <div class="tr-drawer-head">
-            <span class="tr-drawer-title">AI 阅读</span>
             <button
               id="tr-drawer-close"
               class="icon-btn"
@@ -313,9 +304,6 @@
             </button>
           </div>
           <div class="tr-drawer-body">
-            <div class="rail-empty hint" id="tr-rail-empty">
-              选择一张卡片生成 📖 中文导读，或点 📋 本期速览，结果会显示在这里。
-            </div>
             <div
               id="tr-guide-box"
               class="hidden guide-panel"

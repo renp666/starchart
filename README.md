@@ -98,7 +98,7 @@ Note: the interface and the generated summaries are in Chinese.
 
 - **Git 状态**：分支名、是否有未提交更改、领先 / 落后远程、最后提交时间；
   树上有未提交更改的项目会标一个橙点。未检测到 git 时自动跳过（设置里可关）
-- **GitHub 趋势榜**：顶栏 🔥 打开（参考 zread.ai/trending 的产品形态）。
+- **GitHub 趋势榜**：顶栏 🔥 打开。
   抓取 github.com/trending 官方榜单（服务端缓存 30 分钟），支持今日 / 本周 / 本月 ×
   19 种语言筛选、关键词过滤；配合 LLM 可为榜单项目一键生成**中文一句话介绍**（批量并发、
   可中途停止）与**中文导读**（依据仓库 README 分点输出：是什么 / 核心要点 / 适合谁 / 上手建议），

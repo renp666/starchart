@@ -191,6 +191,9 @@ def default_config():
             "model": "",
             "apiKeys": {},
         },
+        # 多套模型配置库：[{id,name,provider,baseUrl,model,apiKey(密文)}]；
+        # 「当前生效」仍是 config.api，切换=把所选套写入 api，所有调用方零改动。
+        "apiProfiles": [],
         "editor": {"name": "VS Code", "cmd": 'code "{path}"'},
         "backupDir": "",
         "theme": "auto",
@@ -243,6 +246,20 @@ def load_config():
                 _curkey = _api.get("apiKey") or ""
                 if _curkey and not _api["apiKeys"].get(_prov) and _curkey != MASK:
                     _api["apiKeys"][_prov] = _curkey
+                # 多套配置库结构兜底；旧配置首载时把当前生效配置收编为第一套
+                if not isinstance(_config.get("apiProfiles"), list):
+                    _config["apiProfiles"] = []
+                if not _config["apiProfiles"]:
+                    _config["apiProfiles"] = [
+                        {
+                            "id": "p1",
+                            "name": "默认（%s）" % (_prov or "custom"),
+                            "provider": _prov,
+                            "baseUrl": _api.get("baseUrl", ""),
+                            "model": _api.get("model", ""),
+                            "apiKey": _curkey if _curkey != MASK else "",
+                        }
+                    ]
                 if not isinstance(_config.get("editor"), dict):
                     _config["editor"] = {"name": "VS Code", "cmd": 'code "{path}"'}
                 if _config.get("theme") not in ("dark", "light", "auto"):
@@ -1603,10 +1620,18 @@ def backup_export(dest):
         out = os.path.join(dest, f"{name}-{i:02d}.zip")
         i += 1
     flush_data()  # 先把窗口内合写的改动落盘，导出才不丢最新数据
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in (DATA_FILE, CONFIG_FILE):
-            if os.path.isfile(f):
-                z.write(f, os.path.basename(f))
+    try:
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in (DATA_FILE, CONFIG_FILE):
+                if os.path.isfile(f):
+                    # pi-lens-ignore: unchecked-throwing-call-python
+                    z.write(f, os.path.basename(f))
+    except OSError as e:
+        # 目录只读 / 磁盘满 / 被安全软件拦截等，归一成可行动的提示
+        return {
+            "ok": False,
+            "error": f"备份文件写入失败（{e}）：请检查目标目录可写、磁盘剩余空间是否充足",
+        }
     return {"ok": True, "path": out}
 
 
@@ -2374,6 +2399,12 @@ def mask_config(cfg):
         keys = api.get("apiKeys")
         if isinstance(keys, dict):
             api["apiKeys"] = {k: (MASK if v else "") for k, v in keys.items()}
+    # 配置库：每套的 key 也掩码（有=********，无=""）
+    profs = out.get("apiProfiles")
+    if isinstance(profs, list):
+        for p in profs:
+            if isinstance(p, dict):
+                p["apiKey"] = MASK if p.get("apiKey") else ""
     return out
 
 
@@ -2537,6 +2568,35 @@ class Handler(BaseHTTPRequestHandler):
             c = mask_config(load_config())
             c["autostart"] = autostart_status()
             return self._json({"ok": True, "config": c})
+        if path == "/api/config/profiles":
+            # 多套模型配置库：回传各套配置（key 掩码）
+            cfg = load_config()
+            profs = cfg.get("apiProfiles") or []
+            return self._json(
+                {
+                    "ok": True,
+                    "profiles": profs,
+                    "active": cfg.get("api", {}).get("provider", ""),
+                    "profilesError": None,
+                }
+            )
+        if path == "/api/config/profiles/key":
+            # 查看明文 key：仅限本机请求（_origin_ok 已拦跨站），供设置页小眼睛。
+            # 参数 id=配置库中某一套；provider=当前设置页所选厂商（未传则当前生效配置）。
+            qs = parse_qs(urlparse(self.path).query)
+            pid = (qs.get("id") or [""])[0]
+            prov = (qs.get("provider") or [""])[0]
+            cfg = load_config()
+            if pid:
+                for p in cfg.get("apiProfiles") or []:
+                    if p.get("id") == pid:
+                        return self._json({"ok": True, "key": api_key(dict(cfg, api={"apiKey": p.get("apiKey", "")}))})
+                return self._json({"ok": True, "key": ""})
+            if prov:
+                # 按厂商的历史存档取（设置页切换厂商未保存时的预览）
+                k = (cfg.get("api", {}).get("apiKeys") or {}).get(prov, "")
+                return self._json({"ok": True, "key": api_key(dict(cfg, api={"apiKey": k}))})
+            return self._json({"ok": True, "key": api_key(cfg)})
         if path == "/api/doc":
             qs = parse_qs(urlparse(self.path).query)
             real = path_allowed(qs.get("path", [""])[0])
@@ -2871,6 +2931,47 @@ class Handler(BaseHTTPRequestHandler):
                                 saved = apiKeys.get(prov) or cfg["api"].get("apiKey") or ""
                             apiKeys[prov] = saved
                             cfg["api"]["apiKey"] = saved
+                    # ---- 多套模型配置库 ----
+                    if isinstance(body.get("apiProfiles"), list):
+                        old = {p.get("id"): p.get("apiKey", "") for p in cfg.get("apiProfiles") or []}
+                        profs = []
+                        for i, p in enumerate(body["apiProfiles"]):
+                            if not isinstance(p, dict):
+                                continue
+                            pid = str(p.get("id") or f"p{i+1}")
+                            k = p.get("apiKey", "")
+                            if k and k != MASK:
+                                k = encrypt_api_key(k)
+                            else:
+                                # 掩码=沿用旧密文；空串=清空
+                                k = old.get(pid) if k == MASK else ""
+                            profs.append(
+                                {
+                                    "id": pid,
+                                    "name": str(p.get("name") or f"配置 {i+1}"),
+                                    "provider": str(p.get("provider") or "custom"),
+                                    "baseUrl": str(p.get("baseUrl") or ""),
+                                    "model": str(p.get("model") or ""),
+                                    "apiKey": k,
+                                }
+                            )
+                        cfg["apiProfiles"] = profs
+                    # activeProfileId：把所选套的内容写入当前生效 api（切换动作）
+                    act = str(body.get("activeProfileId") or "")
+                    if act:
+                        for p in cfg.get("apiProfiles") or []:
+                            if p.get("id") == act:
+                                cfg["api"].update(
+                                    {
+                                        "provider": p["provider"],
+                                        "baseUrl": p["baseUrl"],
+                                        "model": p["model"],
+                                        "apiKey": p["apiKey"],
+                                    }
+                                )
+                                _pv = p["provider"]
+                                cfg["api"].setdefault("apiKeys", {})[_pv] = p["apiKey"]
+                                break
                     save_config()
                 autostart_err = None
                 if "autostart" in body:
@@ -2884,7 +2985,10 @@ class Handler(BaseHTTPRequestHandler):
                 body = self._body_json()
                 api = dict(body)
                 if api.get("apiKey") == MASK:
-                    api["apiKey"] = api_key()
+                    # 掩码=用已存的 key：优先按表单所选厂商的历史存档，其次当前生效
+                    prov = (api.get("provider") or "").strip()
+                    saved = (load_config().get("api", {}).get("apiKeys") or {}).get(prov, "")
+                    api["apiKey"] = api_key(dict(load_config(), api={"apiKey": saved})) if saved else api_key()
                 if not (api.get("baseUrl") and api.get("model")):
                     return self._json({"ok": False, "error": "请填写 baseUrl 和模型名"})
                 text = _test_api(api)

@@ -72,9 +72,22 @@ async function probeAlive() {
 	if (_probeBusy) return false;
 	_probeBusy = true;
 	try {
-		const c = await fetch("/api/config", { method: "GET" });
-		const j = await c.json();
-		return !!(c.ok && j && j.ok !== false);
+		// 目录选择窗口刚关闭时连接可能有瞬时抖动，一次失败不算真离线——
+		// 用全新连接重试一次，只有连续失败才判定"服务真不可达"。
+		for (let attempt = 0; attempt < 2; attempt++) {
+			try {
+				const c = await fetch("/api/config", { method: "GET" });
+				const j = await c.json();
+				return !!(c.ok && j && j.ok !== false);
+			} catch (e) {
+				if (attempt === 0 && isNetError(e)) {
+					await new Promise((r) => setTimeout(r, 150));
+					continue;
+				}
+				throw e;
+			}
+		}
+		return false;
 	} catch {
 		return false;
 	} finally {
@@ -1922,6 +1935,8 @@ function closeModal() {
 
 /* ================ 设置 ================ */
 
+const MASK_JS = "********"; // 与后端 MASK 一致：key 回显掩码
+
 const PROVIDERS = {
 	zhipu: {
 		label: "智谱（glm-4-flash 免费）",
@@ -1933,17 +1948,41 @@ const PROVIDERS = {
 		baseUrl: "https://api.siliconflow.cn/v1",
 		model: "Qwen/Qwen2.5-7B-Instruct",
 	},
+	deepseek: {
+		label: "DeepSeek（deepseek-chat，新用户送额度）",
+		baseUrl: "https://api.deepseek.com",
+		model: "deepseek-chat",
+	},
+	dashscope: {
+		label: "通义千问（qwen-turbo，新用户送额度）",
+		baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		model: "qwen-turbo",
+	},
 	custom: { label: "自定义 OpenAI 兼容", baseUrl: "", model: "" },
 };
 
 function openSettings() {
 	const api_ = config.api || {};
+	// 各厂商分别保存的 key（后端掩码：有=********，无=""），切换厂商时据此回填 key 栏
+	const savedKeys = api_.apiKeys || {};
 	const oldPort = config.port || 6173;
-	const bl = [...(config.blacklist || [])];
 	const settingRoots = [...(config.roots || [])];
+	// 保存前快照：用于保存后判断扫描范围（黑名单/根）是否变更，提示一键重扫
+	const preBlacklist = [...(config.blacklist || [])];
+	const preRoots = [...(config.roots || [])];
 	const m = openModal(
 		`
     <h3>⚙ 设置</h3>
+    <div class="set-wrap">
+    <nav class="set-nav" id="set-nav">
+      <button data-sec="sec-general" class="on">通用</button>
+      <button data-sec="sec-scan">扫描</button>
+      <button data-sec="sec-ai">AI 服务</button>
+      <button data-sec="sec-adv">高级</button>
+    </nav>
+    <div class="set-body" id="set-body">
+    <section class="set-sec" id="sec-general">
+    <h4>通用</h4>
     <div class="field"><label>界面主题</label>
       <select id="set-theme">
         <option value="dark">暗色</option>
@@ -1951,6 +1990,15 @@ function openSettings() {
         <option value="auto">跟随系统</option>
       </select>
     </div>
+    <div class="field"><label>服务端口（修改后需重启）</label>
+      <input type="text" id="set-port" value="${config.port || 6173}" inputmode="numeric" title="本地服务监听端口，默认 6173；改后需重启星图生效，且浏览器标签需用新端口打开">
+    </div>
+    <div class="field"><label>常用备份目录</label>
+      <input type="text" id="set-backupdir" value="${esc(config.backupDir || "")}" placeholder="U 盘或网盘同步文件夹" title="备份导出的默认落盘目录；仅作为默认路径，可留空，每次导出时也能改">
+    </div>
+    </section>
+    <section class="set-sec" id="sec-scan">
+    <h4>扫描</h4>
     <div class="field"><label>扫描根目录</label>
       <div class="taglist" id="set-roots-tags"></div>
       <button id="set-roots-pick" type="button" style="flex:0 0 auto">📁 选择目录…</button>
@@ -1969,17 +2017,33 @@ function openSettings() {
       <label><input type="checkbox" id="set-autostart"> 开机自动启动（登录 Windows 后常驻后台）</label>
       <div class="hint">写入当前用户的启动项，无需管理员权限；取消勾选即移除。</div>
     </div>
-    <div class="field"><label>黑名单（目录名，支持 * 通配符）</label>
-      <div class="taglist" id="set-bl-tags"></div>
-      <div class="row">
-        <input type="text" id="set-bl-input" placeholder="输入名称或通配符">
-        <button id="set-bl-add" style="flex:0 0 auto">添加</button>
+    <div class="field"><label>黑名单 / 忽略目录（.gitignore 风格）</label>
+      <textarea id="set-blacklist" class="blacklist-area" rows="5" spellcheck="false"
+        placeholder="# 每行一条，忽略匹配到的目录名，支持 * 通配符&#10;node_modules&#10;__pycache__&#10;dist*"></textarea>
+      <div class="row blacklist-ops">
+        <button id="set-bl-pick" type="button" style="flex:0 0 auto">📁 选择目录加入…</button>
+        <span class="hint" style="flex:1;align-self:center">每行一条目录名/通配符；# 开头为注释；不区分大小写。修改后需「重新扫描」生效。</span>
       </div>
     </div>
-    <div class="field"><label>已排除的项目（点「恢复」重新纳入）</label>
+    <div class="field"><label>已隐藏的项目（不删除文件，只是不在列表显示）</label>
+      <div class="hint">在项目详情页点「⊘ 隐藏」后出现在这里；勾选后点「恢复选中」可重新纳入列表。</div>
+      <div class="excluded-toolbar">
+        <span id="set-excluded-count" class="hint"></span>
+        <button id="set-ex-restore" type="button" disabled>恢复选中</button>
+      </div>
       <div id="set-excluded" class="excluded-list"></div>
     </div>
-    <hr>
+    </section>
+    <section class="set-sec" id="sec-ai">
+    <h4>AI 服务</h4>
+    <div class="field"><label>配置库（可存多套，一键切换生效）</label>
+      <div id="set-profiles" class="profiles-list"></div>
+      <div class="row" style="margin-top:6px">
+        <input type="text" id="set-profile-name" placeholder="新配置名称，如：免费·智谱 / 付费·DeepSeek" style="flex:1">
+        <button type="button" id="set-profile-add" style="flex:0 0 auto" title="把当前表单里的厂商/地址/模型/Key 存为新的一套">＋ 存为当前</button>
+      </div>
+      <div class="hint">在下方编辑的就是「当前生效」配置；点某套「启用」即切换为当前生效（需保存）。</div>
+    </div>
     <div class="field"><label>AI 服务商</label>
       <select id="set-provider">
         ${Object.entries(PROVIDERS)
@@ -1991,7 +2055,10 @@ function openSettings() {
       <input type="text" id="set-baseurl" value="${esc(api_.baseUrl || "")}">
     </div>
     <div class="field"><label>API Key</label>
-      <input type="password" id="set-apikey" value="${esc(api_.apiKey || "")}">
+      <div class="row">
+        <input type="password" id="set-apikey" value="${esc(api_.apiKey || "")}" autocomplete="off">
+        <button type="button" id="set-apikey-eye" class="icon-btn" style="flex:0 0 auto" title="显示 / 隐藏 API Key" aria-label="显示或隐藏 API Key">👁</button>
+      </div>
     </div>
     <div class="field"><label>模型名</label>
       <input type="text" id="set-model" value="${esc(api_.model || "")}">
@@ -2000,28 +2067,33 @@ function openSettings() {
       <button id="set-test">测试连接</button>
       <span id="set-test-result" class="hint"></span>
     </div>
-    <hr>
-    <div class="field"><label>GitHub 镜像 / 加速前缀（可选）</label>
-      <input type="text" id="set-ghmirror" value="${esc(config.ghMirror || "")}" placeholder="https://gh-proxy.com">
-      <div class="hint">github.com / raw.githubusercontent 被墙或拉不到时，直连失败会自动按此前缀重试（前缀拼在完整 GitHub URL 前，形如 ghproxy 类加速站）。不写死具体镜像，由你自填最稳。</div>
+    <div class="field" id="set-free-models"><label>可用的免费大模型（多厂商）</label>
+      <ul class="free-models">
+        <li><b>智谱</b> · glm-4-flash —— 长期免费，已内置默认。<a target="_blank" rel="noopener" href="https://open.bigmodel.cn">官网申请 Key ↗</a></li>
+        <li><b>硅基流动</b> · 多款开源模型有免费档，已内置。<a target="_blank" rel="noopener" href="https://siliconflow.cn">官网申请 Key ↗</a></li>
+        <li><b>通义千问（阿里·百炼）</b> · qwen-turbo —— 新用户送额度。<a target="_blank" rel="noopener" href="https://bailian.console.aliyun.com">官网申请 Key ↗</a></li>
+        <li><b>DeepSeek</b> · deepseek-chat —— 新用户送额度。<a target="_blank" rel="noopener" href="https://platform.deepseek.com">官网申请 Key ↗</a></li>
+        <li>其它厂商：选「自定义 OpenAI 兼容」填入对应 baseUrl / 模型 / Key，即可共用本页全部 AI 功能。</li>
+      </ul>
+      <div class="hint">默认不预置任何 Key；各家免费额度与政策会调整，请以官网为准，模型名需与所选服务商一致。</div>
+    </div>
+    </section>
+    <section class="set-sec" id="sec-adv">
+    <h4>高级</h4>
+    <div class="field" id="set-ghmirror-row"><label>
+      <input type="checkbox" id="set-ghmirror-on"> 启用 GitHub 镜像 / 加速前缀
+    </label>
+      <select id="set-ghmirror" disabled aria-label="GitHub 镜像前缀"></select>
+      <div class="hint">勾选启用后，GitHub 直连失败会自动经所选加速站重试；取消勾选则镜像失效、只直连。</div>
     </div>
     <hr>
-    <div class="field"><label>常用备份目录</label>
-      <input type="text" id="set-backupdir" value="${esc(config.backupDir || "")}" placeholder="U 盘或网盘同步文件夹">
+    <div class="field"><label>备用编辑器名称（自动检测不到时兜底）</label>
+      <input type="text" id="set-edname" value="${esc(config.editor?.name || "")}" title="仅当星图检测不到本机已装编辑器时，用这个名称展示在「打开方式」里">
     </div>
-    <div class="field"><label>服务端口（修改后需重启）</label>
-      <input type="text" id="set-port" value="${config.port || 6173}">
+    <div class="field"><label>编辑器命令模板（{path} 为占位符）</label>
+      <input type="text" id="set-edcmd" value="${esc(config.editor?.cmd || "")}" placeholder='code "{path}"' title="打开项目的命令，{path} 会替换为项目完整路径，如 code &quot;{path}&quot;">
     </div>
-    <details class="advanced">
-      <summary>高级 · 备用编辑器（一般无需设置）</summary>
-      <div class="field"><label>编辑器名称</label>
-        <input type="text" id="set-edname" value="${esc(config.editor?.name || "")}">
-      </div>
-      <div class="field"><label>编辑器命令模板（{path} 为占位符）</label>
-        <input type="text" id="set-edcmd" value="${esc(config.editor?.cmd || "")}" placeholder='trae "{path}"'>
-      </div>
-      <div class="hint">仅当自动检测不到本机已装编辑器时兜底；{path} 会被替换为项目路径。</div>
-    </details>
+    <div class="hint">仅当自动检测不到本机已装编辑器时兜底；{path} 会被替换为项目路径。</div>
     <details class="advanced" id="set-log-dd">
       <summary>📜 服务日志（跳转 / 启动 / 停止 / 报错）</summary>
       <div class="field">
@@ -2029,7 +2101,11 @@ function openSettings() {
         <button id="set-log-refresh" type="button">刷新</button>
       </div>
     </details>
+    </section>
+    </div>
+    </div>
     <div class="footer">
+      <span id="set-dirty" class="hidden" style="margin-right:auto">● 有未保存修改</span>
       <button id="set-cancel">取消</button>
       <button id="set-save" class="primary">保存</button>
     </div>
@@ -2057,20 +2133,122 @@ function openSettings() {
 		});
 	})();
 
-	// 标记脏数据
-	m.addEventListener("input", () => {
+	// 标记脏数据（同步显示在 footer 的状态点）
+	const dirtyDot = m.querySelector("#set-dirty");
+	const markDirty = () => {
 		modalDirty = true;
-	});
-	m.addEventListener("change", () => {
-		modalDirty = true;
+		if (dirtyDot) dirtyDot.classList.remove("hidden");
+	};
+	m.addEventListener("input", markDirty);
+	m.addEventListener("change", markDirty);
+
+	// 左侧分类导航：点击定位 + scrollspy 高亮。
+	// 用 getBoundingClientRect 差求相对滚动容器的真实位置，避免 offsetTop 因
+	// offsetParent 与滚动容器不一致而把「高级」错定位到上一个「AI 服务」分区。
+	const navEl = m.querySelector("#set-nav");
+	const bodyEl = m.querySelector("#set-body");
+	const navBtns = [...navEl.querySelectorAll("button")];
+	const secTop = (sec) =>
+		sec.getBoundingClientRect().top -
+		bodyEl.getBoundingClientRect().top +
+		bodyEl.scrollTop;
+	navBtns.forEach((b) =>
+		b.addEventListener("click", () => {
+			const sec = m.querySelector("#" + b.dataset.sec);
+			if (sec) bodyEl.scrollTo({ top: secTop(sec) - 8, behavior: "smooth" });
+		}),
+	);
+	bodyEl.addEventListener("scroll", () => {
+		let cur = navBtns[0];
+		navBtns.forEach((b) => {
+			const sec = m.querySelector("#" + b.dataset.sec);
+			if (sec && secTop(sec) - 40 <= bodyEl.scrollTop) cur = b;
+		});
+		navBtns.forEach((b) => b.classList.toggle("on", b === cur));
 	});
 
 	const themeSel = m.querySelector("#set-theme");
-	themeSel.value = config.theme || "dark";
+	themeSel.value = config.theme || "auto";
 	m.querySelector("#set-git").checked = config.gitStatus !== false;
 	m.querySelector("#set-autoscan").checked = config.autoScan !== false;
 	m.querySelector("#set-autostart").checked = config.autostart === true;
-	m.querySelector("#set-ghmirror").value = config.ghMirror || "";
+	// GitHub 镜像：勾选启用 + 下拉选加速站（选择题，非填空题）。若此前用的是
+	// 自定义前缀，保留为一个选项，避免已有配置被丢弃。
+	const GH_PROXIES = [
+		"https://gh-proxy.com",
+		"https://ghfast.top",
+		"https://ghproxy.net",
+		"https://mirror.ghproxy.com",
+		"https://github.moeyy.xyz",
+	];
+	const ghmOn = m.querySelector("#set-ghmirror-on");
+	const ghmSel = m.querySelector("#set-ghmirror");
+	const curMirror = (config.ghMirror || "").trim().replace(/\/+$/, "");
+	const opts = GH_PROXIES.includes(curMirror) || !curMirror
+		? GH_PROXIES
+		: [curMirror, ...GH_PROXIES];
+	ghmSel.innerHTML = opts
+		.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`)
+		.join("");
+	ghmSel.value = curMirror || opts[0];
+	ghmOn.checked = !!curMirror;
+	const syncGhm = () => {
+		ghmSel.disabled = !ghmOn.checked;
+	};
+	ghmOn.addEventListener("change", syncGhm);
+	syncGhm();
+// API Key 小眼睛：显示=拉后端明文（回显的是掩码，真实 key 不下发到前端，
+	// 需要时按当前厂商现取）；隐藏=还原掩码。用户刚输入的新 key 本地就是明文，
+	// 直接切换显示即可。
+	const keyEye = m.querySelector("#set-apikey-eye");
+	if (keyEye) {
+		const keyInput = m.querySelector("#set-apikey");
+		let revealed = ""; // 点开期间暂存明文，隐藏时若未编辑则还原掩码
+		keyEye.addEventListener("click", async () => {
+			const showing = keyInput.type === "text";
+			if (showing) {
+				// → 隐藏：未编辑过就还原成掩码，避免明文留在 DOM
+				if (revealed && keyInput.value === revealed) keyInput.value = MASK_JS;
+				keyInput.type = "password";
+				keyEye.textContent = "👁";
+				keyEye.title = "显示 / 隐藏 API Key";
+				revealed = "";
+				return;
+			}
+			const cur = keyInput.value;
+			if (cur === MASK_JS) {
+				// 值是掩码：向后端取当前厂商的明文
+				keyEye.textContent = "…";
+				try {
+					const r = await api(
+						"/api/config/profiles/key?provider=" +
+							encodeURIComponent(provSel.value),
+					);
+					if (r.ok && r.key) {
+						revealed = r.key;
+						keyInput.value = r.key;
+					} else {
+						toast("尚未保存 API Key，无内容可显示");
+						return;
+					}
+				} catch (e) {
+					toast("读取 Key 失败：" + e.message, true);
+					return;
+				} finally {
+					keyEye.textContent = "🙈";
+					keyEye.title = "隐藏 API Key";
+				}
+				keyInput.type = "text";
+				keyEye.textContent = "🙈";
+				keyEye.title = "隐藏 API Key";
+			} else {
+				// 新输入的明文或空：直接切换显示
+				keyInput.type = "text";
+				keyEye.textContent = "🙈";
+				keyEye.title = "隐藏 API Key";
+			}
+		});
+	}
 	const provSel = m.querySelector("#set-provider");
 	provSel.value = api_.provider || "zhipu";
 	provSel.addEventListener("change", () => {
@@ -2079,27 +2257,133 @@ function openSettings() {
 			m.querySelector("#set-baseurl").value = p.baseUrl;
 			m.querySelector("#set-model").value = p.model;
 		}
+		// 各厂商 key 独立：切到厂商时回填它自己的 key（有则掩码、无则清空），
+		// 避免把上一个厂商的 key 串到新厂商上。
+		const ki = m.querySelector("#set-apikey");
+		if (ki) {
+			ki.value = savedKeys[provSel.value] || "";
+			// 掩码优先显示：后端回传的就是 MASK（有 key）/空串（无），
+			// 明文统一由小眼睛按需现取
+			if (ki.value && ki.value !== MASK_JS) ki.value = MASK_JS;
+			if (ki.type !== "password") ki.type = "password";
+			const eye = m.querySelector("#set-apikey-eye");
+			if (eye) {
+				eye.textContent = "👁";
+				eye.title = "显示 / 隐藏 API Key";
+			}
+		}
 	});
 
-	// 黑名单标签
-	const tagsEl = m.querySelector("#set-bl-tags");
-	const renderTags = () => {
+	// 黑名单：.gitignore 风格文本编辑（每行一条，支持 # 注释与 * 通配符）
+	const blArea = m.querySelector("#set-blacklist");
+	blArea.value = (config.blacklist || []).join("\n");
+	// 选择目录加入：用原生目录选择器挑一个目录，取其目录名作为一条黑名单规则
+	m.querySelector("#set-bl-pick").addEventListener("click", async () => {
+		const btn = m.querySelector("#set-bl-pick");
+		btn.disabled = true;
+		const label = btn.textContent;
+		btn.textContent = "请在弹出的窗口中选择…";
+		try {
+			const r = await api("/api/pick-dir", {});
+			if (r.cancelled || !r.path) return;
+			const name = (r.path.split(/[/\\]+/).filter(Boolean).pop() || r.path).trim();
+			const lines = (blArea.value || "").split("\n");
+			if (!lines.some((l) => l.trim() === name)) {
+				lines.push(name);
+				blArea.value = lines.join("\n");
+			}
+			if (modalDirty && dirtyDot) dirtyDot.classList.remove("hidden");
+		} catch (e) {
+			toast(e.message, true);
+		} finally {
+			btn.disabled = false;
+			btn.textContent = label;
+		}
+	});
+
+	// ---- 多套模型配置库：列表 / 存为当前 / 启用 / 删除 ----
+	const profilesEl = m.querySelector("#set-profiles");
+	const profNameInput = m.querySelector("#set-profile-name");
+	let profiles = (config.apiProfiles || []).map((p) => ({ ...p }));
+	let activeProfileId = ""; // 本次会话中启用的套（保存时提交）
+	const provLabel = (k) => (PROVIDERS[k] ? PROVIDERS[k].label.split("（")[0] : k || "自定义");
+	const renderProfiles = () => {
 		// pi-lens-ignore: no-inner-html-js
-		tagsEl.innerHTML = "";
-		bl.forEach((t, i) => {
-			const tag = document.createElement("span");
-			tag.className = "tag";
+		profilesEl.innerHTML = "";
+		if (!profiles.length) {
 			// pi-lens-ignore: no-inner-html-js
-			tag.innerHTML = `${esc(t)} <span class="x" title="移除">✕</span>`;
-			tag.querySelector(".x").addEventListener("click", () => {
-				bl.splice(i, 1);
+			profilesEl.innerHTML = `<span class="hint">暂无已存配置；填好下方表单后点「＋ 存为当前」。</span>`;
+			return;
+		}
+		for (const p of profiles) {
+			const row = document.createElement("div");
+			row.className = "profile-row" + (p.id === activeProfileId ? " on" : "");
+			const info = document.createElement("span");
+			info.className = "profile-info";
+			info.textContent = `${p.name} · ${provLabel(p.provider)} · ${p.model || "?"}`;
+			info.title = `${p.provider} | ${p.baseUrl} | key:${p.apiKey ? "已存" : "无"}`;
+			const btnUse = document.createElement("button");
+			btnUse.textContent = p.id === activeProfileId ? "✓ 当前" : "启用";
+			btnUse.disabled = p.id === activeProfileId;
+			btnUse.title = "把这套配置填入下方表单并作为当前生效（需保存）";
+			btnUse.addEventListener("click", () => {
+				activeProfileId = p.id;
+				// 表单回填该套
+				provSel.value = p.provider in PROVIDERS ? p.provider : "custom";
+				m.querySelector("#set-baseurl").value = p.baseUrl || "";
+				m.querySelector("#set-model").value = p.model || "";
+				const ki = m.querySelector("#set-apikey");
+				ki.value = p.apiKey ? MASK_JS : "";
+				if (ki.type !== "password") ki.type = "password";
+				const eye2 = m.querySelector("#set-apikey-eye");
+				if (eye2) {
+					eye2.textContent = "👁";
+					eye2.title = "显示 / 隐藏 API Key";
+				}
 				modalDirty = true;
-				renderTags();
+				if (dirtyDot) dirtyDot.classList.remove("hidden");
+				renderProfiles();
 			});
-			tagsEl.appendChild(tag);
-		});
+			const btnDel = document.createElement("button");
+			btnDel.textContent = "✕";
+			btnDel.title = "删除这套配置";
+			btnDel.addEventListener("click", () => {
+				profiles = profiles.filter((x) => x.id !== p.id);
+				if (activeProfileId === p.id) activeProfileId = "";
+				modalDirty = true;
+				if (dirtyDot) dirtyDot.classList.remove("hidden");
+				renderProfiles();
+			});
+			row.appendChild(info);
+			row.appendChild(btnUse);
+			row.appendChild(btnDel);
+			profilesEl.appendChild(row);
+		}
 	};
-	renderTags();
+	m.querySelector("#set-profile-add").addEventListener("click", () => {
+		const name = (profNameInput.value || "").trim();
+		if (!name) {
+			toast("请先给新配置起个名字");
+			profNameInput.focus();
+			return;
+		}
+		const pid = "p" + Date.now().toString(36);
+		profiles.push({
+			id: pid,
+			name,
+			provider: provSel.value,
+			baseUrl: m.querySelector("#set-baseurl").value.trim(),
+			model: m.querySelector("#set-model").value.trim(),
+			apiKey: m.querySelector("#set-apikey").value, // 掩码=沿用旧值（后端处理）
+		});
+		activeProfileId = pid;
+		profNameInput.value = "";
+		modalDirty = true;
+		if (dirtyDot) dirtyDot.classList.remove("hidden");
+		renderProfiles();
+		toast(`已加入配置库：「${name}」（保存后生效）`);
+	});
+	renderProfiles();
 
 	// 扫描根目录：多选，路径由后端在本机弹出文件夹对话框后回传
 	const rootsEl = m.querySelector("#set-roots-tags");
@@ -2124,6 +2408,7 @@ function openSettings() {
 			});
 			rootsEl.appendChild(tag);
 		});
+		if (modalDirty && dirtyDot) dirtyDot.classList.remove("hidden");
 	};
 	renderRoots();
 
@@ -2150,68 +2435,76 @@ function openSettings() {
 		}
 	});
 
-	const blInput = m.querySelector("#set-bl-input");
-	const addBl = () => {
-		const v = blInput.value.trim();
-		if (v && !bl.includes(v)) {
-			bl.push(v);
-			modalDirty = true;
-			renderTags();
-		}
-		blInput.value = "";
-	};
-	m.querySelector("#set-bl-add").addEventListener("click", addBl);
-	blInput.addEventListener("keydown", (e) => {
-		if (e.key === "Enter") {
-			e.preventDefault();
-			addBl();
-		}
-	});
+	// 黑名单改为 .gitignore 风格文本编辑（见上），已无独立"添加"逻辑
 
-	// 已排除的项目列表 + 恢复
+	// 已隐藏的项目：勾选 + 批量恢复
 	const excludedEl = m.querySelector("#set-excluded");
+	const exCountEl = m.querySelector("#set-excluded-count");
+	const exRestoreBtn = m.querySelector("#set-ex-restore");
+	const hiddenCheckbox = {};
+	const updateRestore = () => {
+		const n = Object.values(hiddenCheckbox).filter(Boolean).length;
+		if (exRestoreBtn) {
+			exRestoreBtn.disabled = n === 0;
+			exRestoreBtn.textContent = n ? `恢复选中（${n}）` : "恢复选中";
+		}
+	};
 	const renderExcluded = () => {
 		const list = [];
 		(function walk(n) {
 			if (!n) return;
-			if (n.marked === "off" && n.path)
-				list.push({ name: n.name, path: n.path });
+			if (n.marked === "off" && n.path) list.push({ name: n.name, path: n.path });
 			for (const c of n.children || []) walk(c);
 		})(data.tree);
+		// 重渲染前保留已勾选的路径
+		const checked = new Set(Object.keys(hiddenCheckbox).filter((p) => hiddenCheckbox[p]));
 		// pi-lens-ignore: no-inner-html-js
 		excludedEl.innerHTML = "";
+		if (exCountEl) exCountEl.textContent = list.length ? `共 ${list.length} 个已隐藏` : "";
 		if (!list.length) {
 			// pi-lens-ignore: no-inner-html-js
 			excludedEl.innerHTML = `<span class="hint">无</span>`;
+			updateRestore();
 			return;
 		}
 		for (const item of list) {
-			const row = document.createElement("div");
+			const row = document.createElement("label");
 			row.className = "excluded-row";
+			const cb = document.createElement("input");
+			cb.type = "checkbox";
+			cb.checked = checked.has(item.path);
+			cb.addEventListener("change", () => {
+				hiddenCheckbox[item.path] = cb.checked;
+				updateRestore();
+			});
 			const name = document.createElement("span");
 			name.textContent = item.name;
 			name.title = item.path;
-			const btnRestore = document.createElement("button");
-			btnRestore.textContent = "恢复";
-			btnRestore.addEventListener("click", async () => {
-				btnRestore.disabled = true;
-				btnRestore.textContent = "…";
-				try {
-					await api("/api/mark", { path: item.path, mark: "auto" });
-					await reloadTree();
-					toast(`已恢复「${item.name}」`);
-					renderExcluded();
-				} catch (e) {
-					toast(e.message, true);
-					btnRestore.disabled = false;
-					btnRestore.textContent = "恢复";
-				}
-			});
+			row.appendChild(cb);
 			row.appendChild(name);
-			row.appendChild(btnRestore);
 			excludedEl.appendChild(row);
 		}
+		updateRestore();
 	};
+	if (exRestoreBtn)
+		exRestoreBtn.addEventListener("click", async () => {
+			const paths = Object.keys(hiddenCheckbox).filter((p) => hiddenCheckbox[p]);
+			if (!paths.length) return;
+			exRestoreBtn.disabled = true;
+			let done = 0;
+			for (const p of paths) {
+				try {
+					await api("/api/mark", { path: p, mark: "auto" });
+					done++;
+				} catch (e) {
+					toast(e.message, true);
+				}
+			}
+			await reloadTree();
+			if (done) toast(`已恢复 ${done} 个项目`);
+			renderExcluded();
+		});
+	updateRestore();
 	renderExcluded();
 
 	// 测试连接
@@ -2220,6 +2513,7 @@ function openSettings() {
 		out.textContent = "测试中…";
 		try {
 			const r = await api("/api/config/test", {
+				provider: provSel.value, // 掩码时后端按该厂商的历史 key 测试
 				baseUrl: m.querySelector("#set-baseurl").value.trim(),
 				apiKey: m.querySelector("#set-apikey").value,
 				model: m.querySelector("#set-model").value.trim(),
@@ -2238,13 +2532,20 @@ function openSettings() {
 		const cfg = {
 			theme: themeSel.value,
 			roots: settingRoots,
-			blacklist: bl,
-			api: {
-				provider: provSel.value,
-				baseUrl: m.querySelector("#set-baseurl").value.trim(),
-				apiKey: m.querySelector("#set-apikey").value,
-				model: m.querySelector("#set-model").value.trim(),
-			},
+			blacklist: (m.querySelector("#set-blacklist").value || "")
+				.split("\n")
+				.map((s) => s.trim().replace(/\/+$/, ""))
+				.filter((s) => s && !s.startsWith("#"))
+				.filter((v, i, arr) => arr.findIndex((x) => x === v) === i),
+api: {
+					provider: provSel.value,
+					baseUrl: m.querySelector("#set-baseurl").value.trim(),
+					apiKey: m.querySelector("#set-apikey").value,
+					model: m.querySelector("#set-model").value.trim(),
+				},
+				// 多套模型配置库：key 为掩码时后端沿用旧密文
+				apiProfiles: profiles,
+				activeProfileId: activeProfileId || undefined,
 			editor: {
 				name: m.querySelector("#set-edname").value.trim() || "编辑器",
 				cmd: m.querySelector("#set-edcmd").value.trim(),
@@ -2253,23 +2554,43 @@ function openSettings() {
 			gitStatus: m.querySelector("#set-git").checked,
 			autoScan: m.querySelector("#set-autoscan").checked,
 			autostart: m.querySelector("#set-autostart").checked,
-			ghMirror: m.querySelector("#set-ghmirror").value.trim(),
+			ghMirror: m.querySelector("#set-ghmirror-on").checked
+				? m.querySelector("#set-ghmirror").value.trim()
+				: "",
 			port: parseInt(m.querySelector("#set-port").value, 10) || 6173,
 		};
-		try {
+try {
 			const r = await api("/api/config", { config: cfg });
 			config = r.config;
+			// 配置库以后端落库结果为准（id/密文由后端规范），避免连续保存重复建套
+			if (Array.isArray(config.apiProfiles)) {
+				profiles = config.apiProfiles.map((p) => ({ ...p }));
+				if (!activeProfileId)
+					activeProfileId = "";
+			}
 			applyTheme();
 			modalDirty = false;
 			closeModal();
+			if (dirtyDot) dirtyDot.classList.add("hidden");
 			const autoMsg = r.autostartError
 				? "（开机自启设置失败：" + r.autostartError + "）"
 				: "";
-			toast(
+			const base =
 				"设置已保存" +
-					(cfg.port !== oldPort ? "（端口修改需重启生效）" : "") +
-					autoMsg,
-			);
+				(cfg.port !== oldPort ? "（端口修改需重启生效）" : "") +
+				autoMsg;
+			// 黑名单 / 扫描根变更需重扫才生效：保存后给一键重扫入口
+			const blChanged =
+				JSON.stringify(cfg.blacklist.slice().sort()) !==
+				JSON.stringify((preBlacklist || []).slice().sort());
+			const rootsChanged =
+				JSON.stringify(cfg.roots.slice().sort()) !==
+				JSON.stringify((preRoots || []).slice().sort());
+			if (blChanged || rootsChanged) {
+				toastAct(base + "；扫描范围已变更，建议重扫生效", "立即重扫", () => doScan());
+			} else {
+				toast(base);
+			}
 		} catch (e) {
 			toast("保存失败：" + e.message, true);
 		}
@@ -2537,8 +2858,8 @@ function trendCardHTML(it) {
     <div class="tc-desc">${esc(it.desc || "（无描述）")}</div>
     ${intro ? `<div class="tc-intro">🇨🇳 ${esc(intro)}</div>` : ""}
     <div class="tc-acts">
-      <button data-act="intro">${intro ? "🔄 重生成" : "✨ 中文介绍"}</button>
-      <button data-act="guide">${hasGuide ? "📖 看导读" : "📖 中文导读"}</button>
+      <button data-act="intro" title="用所配 LLM 生成该仓库的中文一句话介绍">${intro ? "🔄 重生成" : "✨ 中文介绍"}</button>
+      <button data-act="guide" title="生成 / 打开该仓库的中文项目导读">${hasGuide ? "📖 看导读" : "📖 中文导读"}</button>
       <button data-act="copy" title="复制仓库地址">⧉ 地址</button>
     </div>
   </div>`;
@@ -2897,6 +3218,30 @@ function bindTrendEvents() {
 	if (trendBound) return;
 	trendBound = true;
 
+	// 趋势页滚轮聚焦：鼠标在趋势视图内滚动时，统一滚趋势列表自身，
+	// 不让事件冒泡去滚外层/其它面板（趋势 = 独立一屏，不应连动别处）。
+	const trendView = $("#trend-view");
+	const trendList = $("#tr-list");
+	const rail = $("#tr-rail");
+	if (trendView && trendList) {
+		trendView.addEventListener(
+			"wheel",
+			(e) => {
+				if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return; // 横向滚轮不劫持
+				if (e.target.closest && rail && e.target.closest("#" + rail.id)) return; // 阅读栏内不劫持
+				if (trendList.scrollHeight <= trendList.clientHeight + 1) return; // 无可滚动内容
+				const atTop = trendList.scrollTop <= 0 && e.deltaY < 0;
+				const atBottom =
+					trendList.scrollTop + trendList.clientHeight >=
+						trendList.scrollHeight - 1 && e.deltaY > 0;
+				if (atTop || atBottom) return; // 已在边界，交给浏览器
+				e.preventDefault();
+				trendList.scrollTop += e.deltaY;
+			},
+			{ passive: false },
+		);
+	}
+
 	// 阅读栏收起：✕ 按钮或点击遮罩
 	const closeDrawer = () => resetTrendPanels();
 	const dc = $("#tr-drawer-close");
@@ -2959,7 +3304,8 @@ function bindTrendEvents() {
 		const desc = card.dataset.desc || "";
 		const act = btn.dataset.act;
 		if (act === "intro") trendOneIntro(name, desc, btn);
-		else if (act === "guide") trendOneGuide(name, desc, btn); else if (act === "copy") {
+		else if (act === "guide") trendOneGuide(name, desc, btn);
+		else if (act === "copy") {
 			navigator.clipboard
 				.writeText("https://github.com/" + name)
 				.then(() => toast("已复制仓库地址"))
