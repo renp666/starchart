@@ -10,6 +10,11 @@ __pycache__/
 # 注意：config.json 含 DPAPI 加密的 API Key，绝对不能入库
 .starchart/
 
+# ===== docs/：本项目的过程文档（PRD / 技术方案 / UX 审查报告），不入库 =====
+# 注意：.gitignore 对「已被 git 跟踪」的文件无效。若 docs 已在索引里，
+# 加完这一行后还要执行一次：git rm --cached -r docs
+/docs
+
 # ===== 运行时产物（旧版本兼容：早期日志/临时文件会生成在根目录）=====
 server.log
 server.log.1

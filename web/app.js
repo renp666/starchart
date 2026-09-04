@@ -72,22 +72,9 @@ async function probeAlive() {
 	if (_probeBusy) return false;
 	_probeBusy = true;
 	try {
-		// 目录选择窗口刚关闭时连接可能有瞬时抖动，一次失败不算真离线——
-		// 用全新连接重试一次，只有连续失败才判定"服务真不可达"。
-		for (let attempt = 0; attempt < 2; attempt++) {
-			try {
-				const c = await fetch("/api/config", { method: "GET" });
-				const j = await c.json();
-				return !!(c.ok && j && j.ok !== false);
-			} catch (e) {
-				if (attempt === 0 && isNetError(e)) {
-					await new Promise((r) => setTimeout(r, 150));
-					continue;
-				}
-				throw e;
-			}
-		}
-		return false;
+		const c = await fetch("/api/config", { method: "GET" });
+		const j = await c.json();
+		return !!(c.ok && j && j.ok !== false);
 	} catch {
 		return false;
 	} finally {
@@ -1957,16 +1944,6 @@ function openSettings() {
 	const m = openModal(
 		`
     <h3>⚙ 设置</h3>
-    <div class="set-wrap">
-    <nav class="set-nav" id="set-nav">
-      <button data-sec="sec-general" class="on">通用</button>
-      <button data-sec="sec-scan">扫描</button>
-      <button data-sec="sec-ai">AI 服务</button>
-      <button data-sec="sec-adv">高级</button>
-    </nav>
-    <div class="set-body" id="set-body">
-    <section class="set-sec" id="sec-general">
-    <h4>通用</h4>
     <div class="field"><label>界面主题</label>
       <select id="set-theme">
         <option value="dark">暗色</option>
@@ -1974,15 +1951,6 @@ function openSettings() {
         <option value="auto">跟随系统</option>
       </select>
     </div>
-    <div class="field"><label>服务端口（修改后需重启）</label>
-      <input type="text" id="set-port" value="${config.port || 6173}">
-    </div>
-    <div class="field"><label>常用备份目录</label>
-      <input type="text" id="set-backupdir" value="${esc(config.backupDir || "")}" placeholder="U 盘或网盘同步文件夹">
-    </div>
-    </section>
-    <section class="set-sec" id="sec-scan">
-    <h4>扫描</h4>
     <div class="field"><label>扫描根目录</label>
       <div class="taglist" id="set-roots-tags"></div>
       <button id="set-roots-pick" type="button" style="flex:0 0 auto">📁 选择目录…</button>
@@ -2011,9 +1979,7 @@ function openSettings() {
     <div class="field"><label>已排除的项目（点「恢复」重新纳入）</label>
       <div id="set-excluded" class="excluded-list"></div>
     </div>
-    </section>
-    <section class="set-sec" id="sec-ai">
-    <h4>AI 服务</h4>
+    <hr>
     <div class="field"><label>AI 服务商</label>
       <select id="set-provider">
         ${Object.entries(PROVIDERS)
@@ -2034,21 +2000,28 @@ function openSettings() {
       <button id="set-test">测试连接</button>
       <span id="set-test-result" class="hint"></span>
     </div>
-    </section>
-    <section class="set-sec" id="sec-adv">
-    <h4>高级</h4>
+    <hr>
     <div class="field"><label>GitHub 镜像 / 加速前缀（可选）</label>
       <input type="text" id="set-ghmirror" value="${esc(config.ghMirror || "")}" placeholder="https://gh-proxy.com">
-      <div class="hint">GitHub 直连失败时自动按此前缀重试（ghproxy 类加速站）。留空则只直连。</div>
+      <div class="hint">github.com / raw.githubusercontent 被墙或拉不到时，直连失败会自动按此前缀重试（前缀拼在完整 GitHub URL 前，形如 ghproxy 类加速站）。不写死具体镜像，由你自填最稳。</div>
     </div>
     <hr>
-    <div class="field"><label>备用编辑器名称（自动检测不到时兜底）</label>
-      <input type="text" id="set-edname" value="${esc(config.editor?.name || "")}">
+    <div class="field"><label>常用备份目录</label>
+      <input type="text" id="set-backupdir" value="${esc(config.backupDir || "")}" placeholder="U 盘或网盘同步文件夹">
     </div>
-    <div class="field"><label>编辑器命令模板（{path} 为占位符）</label>
-      <input type="text" id="set-edcmd" value="${esc(config.editor?.cmd || "")}" placeholder='code "{path}"'>
+    <div class="field"><label>服务端口（修改后需重启）</label>
+      <input type="text" id="set-port" value="${config.port || 6173}">
     </div>
-    <div class="hint">仅当自动检测不到本机已装编辑器时兜底；{path} 会被替换为项目路径。</div>
+    <details class="advanced">
+      <summary>高级 · 备用编辑器（一般无需设置）</summary>
+      <div class="field"><label>编辑器名称</label>
+        <input type="text" id="set-edname" value="${esc(config.editor?.name || "")}">
+      </div>
+      <div class="field"><label>编辑器命令模板（{path} 为占位符）</label>
+        <input type="text" id="set-edcmd" value="${esc(config.editor?.cmd || "")}" placeholder='trae "{path}"'>
+      </div>
+      <div class="hint">仅当自动检测不到本机已装编辑器时兜底；{path} 会被替换为项目路径。</div>
+    </details>
     <details class="advanced" id="set-log-dd">
       <summary>📜 服务日志（跳转 / 启动 / 停止 / 报错）</summary>
       <div class="field">
@@ -2056,11 +2029,7 @@ function openSettings() {
         <button id="set-log-refresh" type="button">刷新</button>
       </div>
     </details>
-    </section>
-    </div>
-    </div>
     <div class="footer">
-      <span id="set-dirty" class="hidden" style="margin-right:auto">● 有未保存修改</span>
       <button id="set-cancel">取消</button>
       <button id="set-save" class="primary">保存</button>
     </div>
@@ -2088,36 +2057,16 @@ function openSettings() {
 		});
 	})();
 
-	// 标记脏数据（同步显示在 footer 的状态点）
-	const dirtyDot = m.querySelector("#set-dirty");
-	const markDirty = () => {
+	// 标记脏数据
+	m.addEventListener("input", () => {
 		modalDirty = true;
-		if (dirtyDot) dirtyDot.classList.remove("hidden");
-	};
-	m.addEventListener("input", markDirty);
-	m.addEventListener("change", markDirty);
-
-	// 左侧分类导航：点击定位 + scrollspy 高亮
-	const navEl = m.querySelector("#set-nav");
-	const bodyEl = m.querySelector("#set-body");
-	const navBtns = [...navEl.querySelectorAll("button")];
-	navBtns.forEach((b) =>
-		b.addEventListener("click", () => {
-			const sec = m.querySelector("#" + b.dataset.sec);
-			if (sec) bodyEl.scrollTo({ top: sec.offsetTop - 8, behavior: "smooth" });
-		}),
-	);
-	bodyEl.addEventListener("scroll", () => {
-		let cur = navBtns[0];
-		navBtns.forEach((b) => {
-			const sec = m.querySelector("#" + b.dataset.sec);
-			if (sec && sec.offsetTop - 40 <= bodyEl.scrollTop) cur = b;
-		});
-		navBtns.forEach((b) => b.classList.toggle("on", b === cur));
+	});
+	m.addEventListener("change", () => {
+		modalDirty = true;
 	});
 
 	const themeSel = m.querySelector("#set-theme");
-	themeSel.value = config.theme || "auto";
+	themeSel.value = config.theme || "dark";
 	m.querySelector("#set-git").checked = config.gitStatus !== false;
 	m.querySelector("#set-autoscan").checked = config.autoScan !== false;
 	m.querySelector("#set-autostart").checked = config.autostart === true;
@@ -2148,10 +2097,9 @@ function openSettings() {
 				renderTags();
 			});
 			tagsEl.appendChild(tag);
-			});
-			if (modalDirty && dirtyDot) dirtyDot.classList.remove("hidden");
-			};
-			renderTags();
+		});
+	};
+	renderTags();
 
 	// 扫描根目录：多选，路径由后端在本机弹出文件夹对话框后回传
 	const rootsEl = m.querySelector("#set-roots-tags");
@@ -2176,7 +2124,6 @@ function openSettings() {
 			});
 			rootsEl.appendChild(tag);
 		});
-		if (modalDirty && dirtyDot) dirtyDot.classList.remove("hidden");
 	};
 	renderRoots();
 
@@ -2315,7 +2262,6 @@ function openSettings() {
 			applyTheme();
 			modalDirty = false;
 			closeModal();
-			if (dirtyDot) dirtyDot.classList.add("hidden");
 			const autoMsg = r.autostartError
 				? "（开机自启设置失败：" + r.autostartError + "）"
 				: "";
@@ -2593,7 +2539,6 @@ function trendCardHTML(it) {
     <div class="tc-acts">
       <button data-act="intro">${intro ? "🔄 重生成" : "✨ 中文介绍"}</button>
       <button data-act="guide">${hasGuide ? "📖 看导读" : "📖 中文导读"}</button>
-      <button data-act="zread" title="用 Zread 打开中文项目文档">Zread</button>
       <button data-act="copy" title="复制仓库地址">⧉ 地址</button>
     </div>
   </div>`;
@@ -2720,8 +2665,7 @@ function showGuide(name, text, cached) {
     <div class="gb-head"><strong>📖 中文导读 · ${esc(name)}</strong>
       <button id="tr-guide-close" title="收起导读" aria-label="收起导读">✕</button></div>
     <div class="guide-box">${renderAIBlock(text)}</div>
-    <div class="hint">由设置中的 LLM 依据 README 生成${cached ? "（缓存）" : ""}，仅供参考；细节以仓库原文为准。
-      <a href="https://zread.ai/${esc(name)}" target="_blank" rel="noopener">在 Zread 查看完整中文文档 ↗</a></div>`;
+    <div class="hint">由设置中的 LLM 依据 README 生成${cached ? "（缓存）" : ""}，仅供参考；细节以仓库原文为准。</div>`;
 	const close = $("#tr-guide-close");
 	if (close)
 		close.addEventListener("click", () => {
@@ -3015,15 +2959,7 @@ function bindTrendEvents() {
 		const desc = card.dataset.desc || "";
 		const act = btn.dataset.act;
 		if (act === "intro") trendOneIntro(name, desc, btn);
-		else if (act === "guide") trendOneGuide(name, desc, btn);
-		else if (act === "zread") {
-			// 只允许 owner/repo 形路径进外链，杜绝任何可注入的 URL 片段
-			const safe = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(name || "")
-				? name
-				: "";
-			// pi-lens-ignore: no-open-redirect-js
-			if (safe) window.open("https://zread.ai/" + safe, "_blank", "noopener");
-		} else if (act === "copy") {
+		else if (act === "guide") trendOneGuide(name, desc, btn); else if (act === "copy") {
 			navigator.clipboard
 				.writeText("https://github.com/" + name)
 				.then(() => toast("已复制仓库地址"))

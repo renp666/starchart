@@ -184,7 +184,13 @@ def default_config():
             "__pycache__",
             ".venv",
         ],
-        "api": {"provider": "zhipu", "baseUrl": "", "apiKey": "", "model": ""},
+        "api": {
+            "provider": "zhipu",
+            "baseUrl": "",
+            "apiKey": "",
+            "model": "",
+            "apiKeys": {},
+        },
         "editor": {"name": "VS Code", "cmd": 'code "{path}"'},
         "backupDir": "",
         "theme": "auto",
@@ -228,6 +234,15 @@ def load_config():
                 # 而设置保存路径会直接写 cfg["api"][...]，缺了这个 dict 会整页报错。
                 if not isinstance(_config.get("api"), dict):
                     _config["api"] = {"provider": "zhipu", "baseUrl": "", "apiKey": "", "model": ""}
+                # API key 按厂商分别记忆：切换服务商不互相串 key。
+                # 首次加载时把旧的单一 key 归档到当前厂商名下。
+                _api = _config["api"]
+                if not isinstance(_api.get("apiKeys"), dict):
+                    _api["apiKeys"] = {}
+                _prov = str(_api.get("provider") or "custom")
+                _curkey = _api.get("apiKey") or ""
+                if _curkey and not _api["apiKeys"].get(_prov) and _curkey != MASK:
+                    _api["apiKeys"][_prov] = _curkey
                 if not isinstance(_config.get("editor"), dict):
                     _config["editor"] = {"name": "VS Code", "cmd": 'code "{path}"'}
                 if _config.get("theme") not in ("dark", "light", "auto"):
@@ -1877,7 +1892,6 @@ def parse_trending(page):
                 "forks": forks,
                 "today": today,
                 "url": "https://github.com/" + full,
-                "zreadUrl": "https://zread.ai/" + full,
             }
         )
     return items
@@ -2352,8 +2366,14 @@ def open_ui(url=None, min_interval=1.0):
 def mask_config(cfg):
     # pi-lens-ignore: unchecked-throwing-call-python
     out = json.loads(json.dumps(cfg))
-    if out.get("api", {}).get("apiKey"):
-        out["api"]["apiKey"] = MASK
+    if out.get("api"):
+        api = out["api"]
+        if api.get("apiKey"):
+            api["apiKey"] = MASK
+        # 按厂商回传 key 是否存在：有则掩码、无则空串，便于前端切换厂商时回填。
+        keys = api.get("apiKeys")
+        if isinstance(keys, dict):
+            api["apiKeys"] = {k: (MASK if v else "") for k, v in keys.items()}
     return out
 
 
@@ -2835,9 +2855,22 @@ class Handler(BaseHTTPRequestHandler):
                         for k in ("provider", "baseUrl", "model"):
                             if k in newapi:
                                 cfg["api"][k] = newapi[k]
+                        prov = str(cfg["api"].get("provider") or "custom")
+                        apiKeys = cfg["api"].setdefault("apiKeys", {})
                         key = newapi.get("apiKey", "")
                         if key and key != MASK:
-                            cfg["api"]["apiKey"] = encrypt_api_key(key)
+                            # 输入了新 key：加密并写入该厂商的存档与当前生效位。
+                            enc = encrypt_api_key(key)
+                            apiKeys[prov] = enc
+                            cfg["api"]["apiKey"] = enc
+                        else:
+                            # 未改（掩码）或显式清空：当前厂商沿用/清空其历史存档。
+                            if key == "":
+                                saved = ""
+                            else:
+                                saved = apiKeys.get(prov) or cfg["api"].get("apiKey") or ""
+                            apiKeys[prov] = saved
+                            cfg["api"]["apiKey"] = saved
                     save_config()
                 autostart_err = None
                 if "autostart" in body:

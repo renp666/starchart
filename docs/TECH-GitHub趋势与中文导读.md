@@ -49,7 +49,7 @@ server.py（ThreadingHTTPServer，端口 6173，可配置）
 { "rank": 1, "fullName": "fmtlib/fmt", "owner": "fmtlib", "name": "fmt",
   "desc": "A modern formatting library", "lang": "C++",
   "langColor": "#f34b7d", "stars": 24352, "forks": 3011, "today": 14,
-  "url": "https://github.com/fmtlib/fmt", "zreadUrl": "https://zread.ai/fmtlib/fmt" }
+  "url": "https://github.com/fmtlib/fmt" }
 ```
 
 ## 3. 后端实现要点（server.py）
@@ -118,7 +118,7 @@ let trendPoll = null, trendTaskId = null;   // 批量轮询句柄
 | `trendDigest` | 速览：渲染进 `#tr-digest-box` |
 | `trendAdHoc` | 任意仓库导读：清洗输入（去 `github.com/` 前缀、`.git` 后缀）后复用 guide 接口 |
 | `renderAIBlock(text)` | 行级解析 AI 纯文本：`- ` → `<ul>`；`适合：/上手：` → kv；`推荐：` → ⭐行；`本期风向：` → 高亮行 |
-| `openGuideModal` | 导读弹窗：结构化渲染 + Zread 外链 + 缓存标识 |
+| `showGuide` | 右阅读栏写入中文导读：结构化渲染 + 缓存标识 |
 
 ### 4.3 样式（style.css 趋势段）
 
@@ -169,4 +169,4 @@ NODE_PATH="C:/Users/Administrator/.workbuddy/binaries/node/workspace/node_module
 
 - 抓取方式：WebFetch（静态）+ agent-browser / curl（动态）均尝试。
 - 发现：`zread.ai/` 与 `/trending` 内容服务端渲染直出 HTML；未观测到任何前端调用的公开 JSON API 端点；站点对非浏览器/自动化流量间歇返回 504，HAR 捕获不稳定。
-- 结论：底层数据逻辑不可公开获取，不具备直接复用条件 → 转自研等价方案（本方案 F1/F2），并保留「Zread 解读」外链作为深读互补。
+- 结论：底层数据逻辑不可公开获取，不具备直接复用条件 → 转自研等价方案（本方案 F1/F2）。
