@@ -16,8 +16,9 @@ server.log.1
 *.tmp
 *.corrupt-*
 *.bak
-# 根目录下划线开头的临时验证脚本（UI 验证等一次性产物）
+# 根目录下划线开头的临时验证产物（UI 验证截图/脚本等一次性产物）
 /_*.js
+/_*.png
 
 # ===== AI / 开发工具的本地工作目录（工具生成，非项目代码）=====
 # 如需在仓库内共享 Claude/CodeBuddy 的项目配置，删除对应行即可
@@ -26,6 +27,7 @@ server.log.1
 .codebuddy/
 .workbuddy/
 .impeccable/
+.mimosa/
 
 # ===== Python 虚拟环境与打包产物（本地环境，体积大且因人而异）=====
 venv/

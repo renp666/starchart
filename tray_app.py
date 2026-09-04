@@ -29,6 +29,9 @@ MOD_CONTROL = 0x0002
 MOD_ALT = 0x0001
 VK_S = 0x53
 
+# 开机自启拉起时带 --autostart：只常驻服务+托盘，不自动弹浏览器
+AUTOSTART = "--autostart" in sys.argv
+
 
 def echo(msg):
     """pythonw 下 sys.stdout 为 None，print 会被静默吞掉；统一走这里，失败也不影响运行。"""
@@ -159,7 +162,8 @@ def main():
     if singleton is None:
         server.log("检测到已有实例运行，仅唤起界面后退出")
         echo("星图已在运行，正在打开界面…")
-        server.open_ui()
+        if not AUTOSTART:
+            server.open_ui()
         return
 
     try:
@@ -170,7 +174,8 @@ def main():
         url = f"http://127.0.0.1:{int(cfg.get('port', 6173))}"
         server.log(f"端口无法绑定（{e}），假定已有实例运行于 {url}，直接唤起界面")
         echo(f"星图疑似已在运行，正在打开 {url}")
-        server.open_ui(url)
+        if not AUTOSTART:
+            server.open_ui(url)
         return
 
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -179,7 +184,7 @@ def main():
     echo(f"星图 StarChart 已在后台启动：{url}")
     echo("托盘图标已就绪；Ctrl+Alt+S 随时唤起；右键托盘图标可退出。")
     # 首次启动主动打开界面（与 server.py 行为一致），不再要求用户手动去点托盘
-    if os.environ.get("STARCHART_NO_BROWSER") != "1":
+    if os.environ.get("STARCHART_NO_BROWSER") != "1" and not AUTOSTART:
         threading.Timer(1.0, lambda: server.open_ui(url)).start()
 
     try:

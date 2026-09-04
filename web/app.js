@@ -72,9 +72,22 @@ async function probeAlive() {
 	if (_probeBusy) return false;
 	_probeBusy = true;
 	try {
-		const c = await fetch("/api/config", { method: "GET" });
-		const j = await c.json();
-		return !!(c.ok && j && j.ok !== false);
+		// 目录选择窗口刚关闭时连接可能有瞬时抖动，一次失败不算真离线——
+		// 用全新连接重试一次，只有连续失败才判定"服务真不可达"。
+		for (let attempt = 0; attempt < 2; attempt++) {
+			try {
+				const c = await fetch("/api/config", { method: "GET" });
+				const j = await c.json();
+				return !!(c.ok && j && j.ok !== false);
+			} catch (e) {
+				if (attempt === 0 && isNetError(e)) {
+					await new Promise((r) => setTimeout(r, 150));
+					continue;
+				}
+				throw e;
+			}
+		}
+		return false;
 	} catch {
 		return false;
 	} finally {
@@ -439,52 +452,105 @@ function frecency(u) {
 	return (u.count || 0) / (1 + hours / 24);
 }
 
+let freqSort = (function () {
+	try {
+		return localStorage.getItem("starchart-freq-sort") || "usage";
+	} catch (e) {
+		return "usage";
+	}
+})();
+function saveFreqSort(v) {
+	try {
+		localStorage.setItem("starchart-freq-sort", v);
+	} catch (e) {}
+}
+function relTime(iso) {
+	if (!iso) return "";
+	const d = new Date(iso);
+	if (isNaN(d)) return "";
+	const sec = (Date.now() - d.getTime()) / 1000;
+	if (sec < 0) return "刚刚";
+	if (sec < 3600) return Math.max(1, Math.floor(sec / 60)) + " 分钟前";
+	if (sec < 86400) return Math.floor(sec / 3600) + " 小时前";
+	if (sec < 86400 * 30) return Math.floor(sec / 86400) + " 天前";
+	return fmtTime(iso).slice(0, 10);
+}
+
 function renderFrequent() {
 	const treeEl = $("#tree");
 	// pi-lens-ignore: no-inner-html-js
 	treeEl.innerHTML = "";
 	$("#empty-state").classList.add("hidden");
 
+	// 工具栏：在「使用频率 / 最近修改」之间切换（记忆选择）
+	const bar = document.createElement("div");
+	bar.className = "freq-bar";
+	const mk = (label, value) => {
+		const b = document.createElement("button");
+		b.className = "seg" + (freqSort === value ? " on" : "");
+		b.textContent = label;
+		b.addEventListener("click", () => {
+			if (freqSort === value) return;
+			freqSort = value;
+			saveFreqSort(value);
+			render();
+		});
+		return b;
+	};
+	bar.appendChild(mk("★ 使用频率", "usage"));
+	bar.appendChild(mk("🕒 最近修改", "mtime"));
+	treeEl.appendChild(bar);
+
 	const usage = data.usage || {};
 	const items = [];
 	(function walk(n) {
 		if (!n) return;
-		if (n.type === "project" && n.marked !== "off" && usage[n.path])
-			items.push(n);
+		if (n.type === "project" && n.marked !== "off") {
+			if (freqSort === "usage" ? usage[n.path] : true) items.push(n);
+		}
 		for (const c of n.children || []) walk(c);
 	})(data.tree);
 
 	if (!items.length) {
-		// pi-lens-ignore: no-inner-html-js
 		treeEl.innerHTML =
-			`<div class="no-results">还没有使用记录。<br>` +
-			`用星图打开或启动几个项目后，这里会按使用频率排出最常用的项目。</div>`;
+			freqSort === "usage"
+				? `<div class="no-results">还没有使用记录。<br>` +
+				  `用星图打开或启动几个项目后，这里会按使用频率排出最常用的项目。</div>`
+				: `<div class="no-results">没有可展示的项目</div>`;
 		return;
 	}
 
-	// 收藏的永远在前，其余按 frecency 排
+	// 收藏永远在前，其余按所选模式排序
 	items.sort((a, b) => {
 		const sa = a.starred ? 1 : 0,
 			sb = b.starred ? 1 : 0;
 		if (sa !== sb) return sb - sa;
+		if (freqSort === "mtime") {
+			const ba = b.mtime || "",
+				aa = a.mtime || "";
+			if (ba !== aa) return ba > aa ? -1 : 1; // 较新的在前
+		}
 		return frecency(usage[b.path]) - frecency(usage[a.path]);
 	});
-	for (const n of items.slice(0, 30)) {
+	for (const n of items.slice(0, 50)) {
 		const u = usage[n.path] || {};
 		const row = document.createElement("div");
-		row.className =
-			"node-row project" + (n.path === selectedPath ? " selected" : "");
+		row.className = "node-row project" + (n.path === selectedPath ? " selected" : "");
 		row.dataset.path = n.path;
 		row.setAttribute("role", "treeitem");
 		row.setAttribute("tabindex", "-1");
 		row.title = n.path;
+		const mark =
+			freqSort === "mtime"
+				? `<span class="filecount" title="最近修改">${esc(relTime(n.mtime))}</span>`
+				: `<span class="filecount" title="使用次数">${u.count || 0} 次</span>`;
 		// pi-lens-ignore: no-inner-html-js
 		row.innerHTML =
 			`<span class="twisty"></span>` +
 			`<span class="icon">🛠</span>` +
 			`<span class="node-main"><span class="name">${esc(n.name)}</span></span>` +
 			(n.intro ? `<span class="intro-line">${esc(n.intro)}</span>` : "") +
-			`<span class="filecount" title="使用次数">${u.count || 0} 次</span>`;
+			mark;
 		row.addEventListener("click", () => {
 			selectedPath = n.path;
 			selectedNode = n;
@@ -1281,50 +1347,122 @@ function stopLaunchPoll() {
 function mdToHtml(md) {
 	const lines = String(md).replace(/\r/g, "").split("\n");
 	let html = "",
-		inCode = false,
+		inCode = 0,
+		inQuote = false,
 		inUl = false,
-		inOl = false;
+		inOl = false,
+		i = 0;
+	const closeLists = () => {
+		if (inUl) {
+			html += "</ul>";
+			inUl = false;
+		}
+		if (inOl) {
+			html += "</ol>";
+			inOl = false;
+		}
+	};
+	const closeQuote = () => {
+		if (inQuote) {
+			html += "</blockquote>";
+			inQuote = false;
+		}
+	};
 	const inline = (s) =>
 		esc(s)
 			.replace(/!\[[^\]]*\]\([^)]*\)/g, "")
 			.replace(/\[([^\]]*)\]\(([^)]*)\)/g, "$1")
 			.replace(/`([^`]+)`/g, "<code>$1</code>")
 			.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
-	for (const line of lines) {
+
+	const sepRe = /^\s*\|?[\s\-:|]+\|?\s*$/;
+	const isTableSep = (s) => sepRe.test(s) && s.includes("-");
+
+	while (i < lines.length) {
+		const line = lines[i];
+
 		if (line.trim().startsWith("```")) {
-			if (inUl) {
-				html += "</ul>";
-				inUl = false;
-			}
-			if (inOl) {
-				html += "</ol>";
-				inOl = false;
-			}
+			closeLists();
+			closeQuote();
 			html += inCode ? "</pre>" : "<pre>";
-			inCode = !inCode;
+			inCode ^= 1;
+			i++;
 			continue;
 		}
 		if (inCode) {
 			html += esc(line) + "\n";
+			i++;
 			continue;
 		}
+
+		// 表格：当前行含 | 且下一行是 --- 分隔线
+		if (line.includes("|") && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+			closeLists();
+			closeQuote();
+			const rows = [];
+			let j = i;
+			while (j < lines.length && lines[j].includes("|")) {
+				if (j !== i && isTableSep(lines[j])) {
+					j++;
+					continue;
+				}
+				rows.push(lines[j]);
+				j++;
+			}
+			const cells = (r) =>
+				r
+					.trim()
+					.replace(/^\|/, "")
+					.replace(/\|$/, "")
+					.split("|")
+					.map((c) => c.trim());
+			html +=
+				"<table><thead><tr>" +
+				cells(rows[0]).map((c) => `<th>${inline(c)}</th>`).join("") +
+				"</tr></thead>";
+			if (rows.length > 1) {
+				html += "<tbody>";
+				for (let r = 1; r < rows.length; r++)
+					html +=
+						"<tr>" +
+						cells(rows[r]).map((c) => `<td>${inline(c)}</td>`).join("") +
+						"</tr>";
+				html += "</tbody>";
+			}
+			html += "</table>";
+			i = j;
+			continue;
+		}
+
+		// 引用
+		const q = line.match(/^\s*>\s?(.*)/);
+		if (q) {
+			closeLists();
+			if (!inQuote) {
+				html += "<blockquote>";
+				inQuote = true;
+			}
+			html += `<p>${inline(q[1])}</p>`;
+			i++;
+			continue;
+		}
+		closeQuote();
+
 		if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) {
+			closeLists();
 			html += "<hr>";
+			i++;
 			continue;
 		}
+
 		const h = line.match(/^(#{1,4})\s+(.*)/);
 		if (h) {
-			if (inUl) {
-				html += "</ul>";
-				inUl = false;
-			}
-			if (inOl) {
-				html += "</ol>";
-				inOl = false;
-			}
+			closeLists();
 			html += `<h${h[1].length + 1}>${inline(h[2])}</h${h[1].length + 1}>`;
+			i++;
 			continue;
 		}
+
 		const ul = line.match(/^\s*[-*+]\s+(.*)/);
 		const ol = line.match(/^\s*\d+\.\s+(.*)/);
 		if (ul) {
@@ -1337,6 +1475,7 @@ function mdToHtml(md) {
 				inUl = true;
 			}
 			html += `<li>${inline(ul[1])}</li>`;
+			i++;
 			continue;
 		}
 		if (ol) {
@@ -1349,20 +1488,19 @@ function mdToHtml(md) {
 				inOl = true;
 			}
 			html += `<li>${inline(ol[1])}</li>`;
+			i++;
 			continue;
 		}
-		if (inUl) {
-			html += "</ul>";
-			inUl = false;
+		closeLists();
+		if (!line.trim()) {
+			i++;
+			continue;
 		}
-		if (inOl) {
-			html += "</ol>";
-			inOl = false;
-		}
-		if (!line.trim()) continue;
 		html += `<p>${inline(line)}</p>`;
+		i++;
 	}
 	if (inCode) html += "</pre>";
+	if (inQuote) html += "</blockquote>";
 	if (inUl) html += "</ul>";
 	if (inOl) html += "</ol>";
 	return html;
@@ -1815,9 +1953,20 @@ function openSettings() {
 	const api_ = config.api || {};
 	const oldPort = config.port || 6173;
 	const bl = [...(config.blacklist || [])];
+	const settingRoots = [...(config.roots || [])];
 	const m = openModal(
 		`
     <h3>⚙ 设置</h3>
+    <div class="set-wrap">
+    <nav class="set-nav" id="set-nav">
+      <button data-sec="sec-general" class="on">通用</button>
+      <button data-sec="sec-scan">扫描</button>
+      <button data-sec="sec-ai">AI 服务</button>
+      <button data-sec="sec-adv">高级</button>
+    </nav>
+    <div class="set-body" id="set-body">
+    <section class="set-sec" id="sec-general">
+    <h4>通用</h4>
     <div class="field"><label>界面主题</label>
       <select id="set-theme">
         <option value="dark">暗色</option>
@@ -1825,8 +1974,20 @@ function openSettings() {
         <option value="auto">跟随系统</option>
       </select>
     </div>
-    <div class="field"><label>扫描根目录（每行一个）</label>
-      <textarea id="set-roots" rows="2">${esc((config.roots || []).join("\n"))}</textarea>
+    <div class="field"><label>服务端口（修改后需重启）</label>
+      <input type="text" id="set-port" value="${config.port || 6173}">
+    </div>
+    <div class="field"><label>常用备份目录</label>
+      <input type="text" id="set-backupdir" value="${esc(config.backupDir || "")}" placeholder="U 盘或网盘同步文件夹">
+    </div>
+    </section>
+    <section class="set-sec" id="sec-scan">
+    <h4>扫描</h4>
+    <div class="field"><label>扫描根目录</label>
+      <div class="taglist" id="set-roots-tags"></div>
+      <button id="set-roots-pick" type="button" style="flex:0 0 auto">📁 选择目录…</button>
+      <div class="hint">可添加多个根目录，点目录上的 ✕ 移除。
+        选择窗口由星图服务在你的桌面上弹出——浏览器出于安全不提供本地路径，无法在网页里选。</div>
     </div>
     <div class="field">
       <label><input type="checkbox" id="set-git"> 扫描时读取 Git 状态（分支 / 未提交 / 最后提交时间）</label>
@@ -1835,6 +1996,10 @@ function openSettings() {
     <div class="field">
       <label><input type="checkbox" id="set-autoscan"> 启动时自动扫描一次，保持索引最新</label>
       <div class="hint">服务每次启动后后台自动更新索引（不阻塞使用）；刚扫过 1 小时内不重复扫。</div>
+    </div>
+    <div class="field">
+      <label><input type="checkbox" id="set-autostart"> 开机自动启动（登录 Windows 后常驻后台）</label>
+      <div class="hint">写入当前用户的启动项，无需管理员权限；取消勾选即移除。</div>
     </div>
     <div class="field"><label>黑名单（目录名，支持 * 通配符）</label>
       <div class="taglist" id="set-bl-tags"></div>
@@ -1846,7 +2011,9 @@ function openSettings() {
     <div class="field"><label>已排除的项目（点「恢复」重新纳入）</label>
       <div id="set-excluded" class="excluded-list"></div>
     </div>
-    <hr>
+    </section>
+    <section class="set-sec" id="sec-ai">
+    <h4>AI 服务</h4>
     <div class="field"><label>AI 服务商</label>
       <select id="set-provider">
         ${Object.entries(PROVIDERS)
@@ -1867,29 +2034,33 @@ function openSettings() {
       <button id="set-test">测试连接</button>
       <span id="set-test-result" class="hint"></span>
     </div>
-    <hr>
+    </section>
+    <section class="set-sec" id="sec-adv">
+    <h4>高级</h4>
     <div class="field"><label>GitHub 镜像 / 加速前缀（可选）</label>
       <input type="text" id="set-ghmirror" value="${esc(config.ghMirror || "")}" placeholder="https://gh-proxy.com">
-      <div class="hint">github.com / raw.githubusercontent 被墙或拉不到时，直连失败会自动按此前缀重试（前缀拼在完整 GitHub URL 前，形如 ghproxy 类加速站）。不写死具体镜像，由你自填最稳。</div>
+      <div class="hint">GitHub 直连失败时自动按此前缀重试（ghproxy 类加速站）。留空则只直连。</div>
     </div>
     <hr>
-    <div class="field"><label>常用备份目录</label>
-      <input type="text" id="set-backupdir" value="${esc(config.backupDir || "")}" placeholder="U 盘或网盘同步文件夹">
+    <div class="field"><label>备用编辑器名称（自动检测不到时兜底）</label>
+      <input type="text" id="set-edname" value="${esc(config.editor?.name || "")}">
     </div>
-    <div class="field"><label>服务端口（修改后需重启）</label>
-      <input type="text" id="set-port" value="${config.port || 6173}">
+    <div class="field"><label>编辑器命令模板（{path} 为占位符）</label>
+      <input type="text" id="set-edcmd" value="${esc(config.editor?.cmd || "")}" placeholder='code "{path}"'>
     </div>
-    <details class="advanced">
-      <summary>高级 · 备用编辑器（一般无需设置）</summary>
-      <div class="field"><label>编辑器名称</label>
-        <input type="text" id="set-edname" value="${esc(config.editor?.name || "")}">
+    <div class="hint">仅当自动检测不到本机已装编辑器时兜底；{path} 会被替换为项目路径。</div>
+    <details class="advanced" id="set-log-dd">
+      <summary>📜 服务日志（跳转 / 启动 / 停止 / 报错）</summary>
+      <div class="field">
+        <pre id="set-log" class="log-view">加载中…</pre>
+        <button id="set-log-refresh" type="button">刷新</button>
       </div>
-      <div class="field"><label>编辑器命令模板（{path} 为占位符）</label>
-        <input type="text" id="set-edcmd" value="${esc(config.editor?.cmd || "")}" placeholder='trae "{path}"'>
-      </div>
-      <div class="hint">仅当自动检测不到本机已装编辑器时兜底；{path} 会被替换为项目路径。</div>
     </details>
+    </section>
+    </div>
+    </div>
     <div class="footer">
+      <span id="set-dirty" class="hidden" style="margin-right:auto">● 有未保存修改</span>
       <button id="set-cancel">取消</button>
       <button id="set-save" class="primary">保存</button>
     </div>
@@ -1897,18 +2068,59 @@ function openSettings() {
 		$("#btn-settings"),
 	);
 
-	// 标记脏数据
-	m.addEventListener("input", () => {
+	// 服务日志面板：点击展开时拉取，可手动刷新
+	(async () => {
+		const dd = m.querySelector("#set-log-dd");
+		const pre = m.querySelector("#set-log");
+		const loadLog = async () => {
+			pre.textContent = "加载中…";
+			try {
+				const r = await api("/api/log");
+				pre.textContent = r.log || "（暂无日志）";
+				pre.scrollTop = pre.scrollHeight;
+			} catch (e) {
+				pre.textContent = "读取失败：" + e.message;
+			}
+		};
+		m.querySelector("#set-log-refresh").addEventListener("click", loadLog);
+		dd.addEventListener("toggle", () => {
+			if (dd.open) loadLog();
+		});
+	})();
+
+	// 标记脏数据（同步显示在 footer 的状态点）
+	const dirtyDot = m.querySelector("#set-dirty");
+	const markDirty = () => {
 		modalDirty = true;
-	});
-	m.addEventListener("change", () => {
-		modalDirty = true;
+		if (dirtyDot) dirtyDot.classList.remove("hidden");
+	};
+	m.addEventListener("input", markDirty);
+	m.addEventListener("change", markDirty);
+
+	// 左侧分类导航：点击定位 + scrollspy 高亮
+	const navEl = m.querySelector("#set-nav");
+	const bodyEl = m.querySelector("#set-body");
+	const navBtns = [...navEl.querySelectorAll("button")];
+	navBtns.forEach((b) =>
+		b.addEventListener("click", () => {
+			const sec = m.querySelector("#" + b.dataset.sec);
+			if (sec) bodyEl.scrollTo({ top: sec.offsetTop - 8, behavior: "smooth" });
+		}),
+	);
+	bodyEl.addEventListener("scroll", () => {
+		let cur = navBtns[0];
+		navBtns.forEach((b) => {
+			const sec = m.querySelector("#" + b.dataset.sec);
+			if (sec && sec.offsetTop - 40 <= bodyEl.scrollTop) cur = b;
+		});
+		navBtns.forEach((b) => b.classList.toggle("on", b === cur));
 	});
 
 	const themeSel = m.querySelector("#set-theme");
-	themeSel.value = config.theme || "dark";
+	themeSel.value = config.theme || "auto";
 	m.querySelector("#set-git").checked = config.gitStatus !== false;
 	m.querySelector("#set-autoscan").checked = config.autoScan !== false;
+	m.querySelector("#set-autostart").checked = config.autostart === true;
 	m.querySelector("#set-ghmirror").value = config.ghMirror || "";
 	const provSel = m.querySelector("#set-provider");
 	provSel.value = api_.provider || "zhipu";
@@ -1936,9 +2148,61 @@ function openSettings() {
 				renderTags();
 			});
 			tagsEl.appendChild(tag);
+			});
+			if (modalDirty && dirtyDot) dirtyDot.classList.remove("hidden");
+			};
+			renderTags();
+
+	// 扫描根目录：多选，路径由后端在本机弹出文件夹对话框后回传
+	const rootsEl = m.querySelector("#set-roots-tags");
+	const renderRoots = () => {
+		// pi-lens-ignore: no-inner-html-js
+		rootsEl.innerHTML = "";
+		if (!settingRoots.length) {
+			// pi-lens-ignore: no-inner-html-js
+			rootsEl.innerHTML = `<span class="hint">尚未选择目录</span>`;
+			return;
+		}
+		settingRoots.forEach((p, i) => {
+			const tag = document.createElement("span");
+			tag.className = "tag";
+			tag.title = p;
+			// pi-lens-ignore: no-inner-html-js
+			tag.innerHTML = `${esc(p)} <span class="x" title="移除">✕</span>`;
+			tag.querySelector(".x").addEventListener("click", () => {
+				settingRoots.splice(i, 1);
+				modalDirty = true;
+				renderRoots();
+			});
+			rootsEl.appendChild(tag);
 		});
+		if (modalDirty && dirtyDot) dirtyDot.classList.remove("hidden");
 	};
-	renderTags();
+	renderRoots();
+
+	const pickBtn = m.querySelector("#set-roots-pick");
+	pickBtn.addEventListener("click", async () => {
+		pickBtn.disabled = true;
+		const label = pickBtn.textContent;
+		pickBtn.textContent = "请在弹出的窗口中选择…";
+		try {
+			const r = await api("/api/pick-dir", {});
+			if (r.cancelled || !r.path) return;
+			if (settingRoots.includes(r.path)) {
+				toast("该目录已在列表中");
+				return;
+			}
+			settingRoots.push(r.path);
+			modalDirty = true;
+			renderRoots();
+		} catch (e) {
+			toast(e.message, true);
+		} finally {
+			pickBtn.disabled = false;
+			pickBtn.textContent = label;
+		}
+	});
+
 	const blInput = m.querySelector("#set-bl-input");
 	const addBl = () => {
 		const v = blInput.value.trim();
@@ -2026,11 +2290,7 @@ function openSettings() {
 	m.querySelector("#set-save").addEventListener("click", async () => {
 		const cfg = {
 			theme: themeSel.value,
-			roots: m
-				.querySelector("#set-roots")
-				.value.split("\n")
-				.map((s) => s.trim())
-				.filter(Boolean),
+			roots: settingRoots,
 			blacklist: bl,
 			api: {
 				provider: provSel.value,
@@ -2045,6 +2305,7 @@ function openSettings() {
 			backupDir: m.querySelector("#set-backupdir").value.trim(),
 			gitStatus: m.querySelector("#set-git").checked,
 			autoScan: m.querySelector("#set-autoscan").checked,
+			autostart: m.querySelector("#set-autostart").checked,
 			ghMirror: m.querySelector("#set-ghmirror").value.trim(),
 			port: parseInt(m.querySelector("#set-port").value, 10) || 6173,
 		};
@@ -2054,8 +2315,14 @@ function openSettings() {
 			applyTheme();
 			modalDirty = false;
 			closeModal();
+			if (dirtyDot) dirtyDot.classList.add("hidden");
+			const autoMsg = r.autostartError
+				? "（开机自启设置失败：" + r.autostartError + "）"
+				: "";
 			toast(
-				"设置已保存" + (cfg.port !== oldPort ? "（端口修改需重启生效）" : ""),
+				"设置已保存" +
+					(cfg.port !== oldPort ? "（端口修改需重启生效）" : "") +
+					autoMsg,
 			);
 		} catch (e) {
 			toast("保存失败：" + e.message, true);
@@ -2202,6 +2469,7 @@ const trend = {
 };
 let trendPoll = null; // 批量生成进度轮询
 let trendTaskId = null;
+let trendReqSeq = 0; // 榜单拉取序号：快速切时段/语言时，只认最后一次请求的响应
 
 function fmtStar(n) {
 	n = Number(n) || 0;
@@ -2250,6 +2518,7 @@ function renderAIBlock(text) {
 async function trendLoad(force) {
 	const listEl = $("#tr-list");
 	const metaEl = $("#tr-meta");
+	const seq = ++trendReqSeq; // 只认最后一次请求
 	// pi-lens-ignore: no-inner-html-js
 	if (listEl)
 		listEl.innerHTML = `<div class="hint">正在拉取 GitHub 趋势…</div>`;
@@ -2258,6 +2527,8 @@ async function trendLoad(force) {
 			`?since=${encodeURIComponent(trend.since)}&lang=${encodeURIComponent(trend.lang)}` +
 			(force ? "&refresh=1" : "");
 		const r = await api("/api/trending" + q);
+		// 期间又切了时段/语言/刷新：丢弃这个过期响应，否则新条件下会显示旧数据
+		if (seq !== trendReqSeq) return;
 		trend.items = r.items || [];
 		trend.intros = r.intros || {};
 		trend.guides = r.guides || {};
@@ -2291,6 +2562,7 @@ async function trendLoad(force) {
 					: "（刚拉取）");
 		}
 	} catch (e) {
+		if (seq !== trendReqSeq) return; // 过期请求的错误不打扰用户
 		// pi-lens-ignore: no-inner-html-js
 		if (listEl)
 			listEl.innerHTML = `<div class="hint">拉取失败：${esc(e.message)}</div>`;
@@ -2426,14 +2698,15 @@ function trendRailOpen() {
 
 /* 把某面板滚进阅读栏可视区（宽屏右栏内滚动；窄屏整栏位于列表上方已可见） */
 function trendScrollPanel(box) {
-	const rail = $("#tr-rail");
-	if (!rail) return;
+	// 真正的滚动容器是 .tr-drawer-body（overflow-y:auto），#tr-rail 不可滚动
+	const scroller = box.closest(".tr-drawer-body") || $("#tr-rail");
+	if (!scroller) return;
 	const target =
 		box.getBoundingClientRect().top -
-		rail.getBoundingClientRect().top +
-		rail.scrollTop -
+		scroller.getBoundingClientRect().top +
+		scroller.scrollTop -
 		4;
-	rail.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+	scroller.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
 }
 
 /* 导读展示：写入右阅读栏 #tr-guide-box，可收起；不重建列表、不移动原列表焦点 */
@@ -2532,7 +2805,7 @@ async function trendDigest() {
 	box.innerHTML = `
     <div class="gb-head"><strong>📋 本期速览 · ${esc(scopeLabel)}</strong>
       <button id="tr-digest-close" title="收起速览" aria-label="收起速览">✕</button></div>
-    <div class="hint">正在让 AI 通读榜单并总结…（约需十几秒）</div>`;
+    <div class="digest-body"><div class="hint">正在让 AI 通读榜单并总结…（约需十几秒）</div></div>`;
 	box.classList.remove("hidden");
 	trendRailOpen();
 	const close = $("#tr-digest-close");
@@ -2550,19 +2823,11 @@ async function trendDigest() {
 		const body = box.querySelector(".digest-body");
 		// pi-lens-ignore: no-inner-html-js
 		if (body) body.innerHTML = renderAIBlock(r.text);
-		// pi-lens-ignore: no-inner-html-js
-		else
-			box.innerHTML = box.innerHTML.replace(
-				'<div class="hint">正在让 AI 通读榜单并总结…（约需十几秒）</div>',
-				`<div class="digest-body">${renderAIBlock(r.text)}</div>`,
-			);
 		requestAnimationFrame(() => trendScrollPanel(box));
 	} catch (e) {
+		const body = box.querySelector(".digest-body");
 		// pi-lens-ignore: no-inner-html-js
-		box.innerHTML = box.innerHTML.replace(
-			'<div class="hint">正在让 AI 通读榜单并总结…（约需十几秒）</div>',
-			`<div class="hint">${esc(e.message)}</div>`,
-		);
+		if (body) body.innerHTML = `<div class="hint">${esc(e.message)}</div>`;
 		toast(e.message, true);
 	} finally {
 		trend.digestBusy = false;

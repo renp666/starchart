@@ -73,6 +73,13 @@ body.light {
 	margin: 0;
 	padding: 0;
 }
+/* 表单控件默认不继承 font-family，显式继承以与正文保持一致 */
+button,
+input,
+textarea,
+select {
+	font-family: inherit;
+}
 html,
 body {
 	height: 100%;
@@ -317,6 +324,70 @@ button.danger {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* ---------- 常用视图：排序切换 ---------- */
+.freq-bar {
+	display: flex;
+	gap: 6px;
+	padding: 2px 8px 8px;
+	border-bottom: 1px solid var(--border);
+	margin-bottom: 6px;
+}
+.freq-bar .seg {
+	flex: 0 0 auto;
+	padding: 3px 10px;
+	font-size: 11px;
+	border-radius: 12px;
+	border-color: var(--border);
+	background: var(--bg3);
+	color: var(--text-dim);
+}
+.freq-bar .seg:hover { color: var(--text); }
+.freq-bar .seg.on {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: #fff;
+}
+
+/* ---------- 服务日志视图 ---------- */
+.log-view {
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font-mono);
+	font-size: 11px;
+	line-height: 1.5;
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	white-space: pre-wrap;
+	word-break: break-all;
+	max-height: 260px;
+	overflow: auto;
+	margin-bottom: 8px;
+}
+
+/* ---------- 使用说明里的表格 / 引用 ---------- */
+#detail .doc-box table {
+	width: 100%;
+	border-collapse: collapse;
+	margin: 8px 0;
+	font-size: 12px;
+}
+#detail .doc-box th,
+#detail .doc-box td {
+	border: 1px solid var(--border);
+	padding: 4px 8px;
+	text-align: left;
+}
+#detail .doc-box th { background: var(--bg3); font-weight: 600; }
+#detail .doc-box blockquote {
+	margin: 6px 0;
+	padding: 2px 12px;
+	border-left: 3px solid var(--accent);
+	background: var(--bg3);
+	color: var(--text-dim);
+	border-radius: 0 4px 4px 0;
+}
+#detail .doc-box blockquote p { margin: 4px 0; }
 .excluded-row button {
 	flex: 0 0 auto;
 	padding: 2px 10px;
@@ -718,6 +789,93 @@ main {
 .modal .row > * {
 	flex: 1;
 }
+/* ---------- 设置弹窗：左分类导航 + 右内容 ---------- */
+/* 含设置两栏结构的弹窗加宽（:has 不支持时回落 520px，仍可用） */
+.modal:has(> .set-wrap) {
+	width: 780px;
+}
+.set-wrap {
+	display: flex;
+	gap: 16px;
+	min-height: 0;
+}
+.set-nav {
+	flex: 0 0 112px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	align-self: flex-start;
+	border-right: 1px solid var(--border);
+	padding-right: 10px;
+}
+.set-nav button {
+	border: none;
+	background: none;
+	text-align: left;
+	padding: 6px 10px;
+	font-size: 13px;
+	color: var(--text-dim);
+	border-radius: 6px;
+	cursor: pointer;
+}
+.set-nav button:hover {
+	color: var(--text);
+	background: var(--bg3);
+}
+.set-nav button.on {
+	color: var(--accent);
+	background: var(--accent-soft);
+	font-weight: 600;
+}
+.set-body {
+	flex: 1;
+	min-width: 0;
+	position: relative;   /* 作为 section offsetTop 的参照 */
+	max-height: calc(86vh - 170px);
+	overflow-y: auto;
+	padding-right: 4px;
+}
+.set-sec {
+	margin-bottom: 22px;
+}
+.set-sec h4 {
+	font-size: 11.5px;
+	font-weight: 650;
+	letter-spacing: 0.05em;
+	color: var(--text-dim);
+	margin: 0 0 12px;
+	padding-bottom: 6px;
+	border-bottom: 1px solid var(--border);
+}
+.set-test-row {
+	align-items: center;
+	min-height: 30px;   /* 测试结果出现/消失时不再跳动 */
+}
+#set-dirty {
+	color: var(--warn);
+	font-size: 12px;
+}
+#set-dirty.hidden {
+	display: none !important;
+}
+@media (max-width: 760px) {
+	/* 窄屏：左导航降级为顶部横向 tab */
+	.set-wrap {
+		flex-direction: column;
+		gap: 10px;
+	}
+	.set-nav {
+		flex-direction: row;
+		flex-wrap: wrap;
+		border-right: none;
+		border-bottom: 1px solid var(--border);
+		padding: 0 0 8px;
+	}
+	.set-body {
+		max-height: none;
+	}
+}
+
 .modal .footer {
 	display: flex;
 	justify-content: flex-end;
@@ -776,6 +934,12 @@ main {
 	flex-wrap: wrap;
 	gap: 6px;
 	margin-bottom: 8px;
+}
+/* 扫描根目录是长路径，单个标签不允许撑破弹窗宽度 */
+.taglist .tag {
+	max-width: 100%;
+	overflow: hidden;
+	white-space: nowrap;
 }
 .tag {
 	display: inline-flex;
@@ -1323,6 +1487,16 @@ main {
 }
 .tr-toolbar select {
 	flex: 0 0 128px;
+	padding: 5px 10px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--bg);
+	color: var(--text);
+	outline: none;
+}
+.tr-toolbar select:focus {
+	border-color: var(--focus);
+	box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .tr-toolbar input[type="text"] {
 	flex: 1 1 120px;
@@ -1609,6 +1783,12 @@ main {
 	flex: 1;
 	overflow-y: auto;
 	padding: 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+.tr-drawer-body > * {
+	flex: 0 0 auto;
 }
 .rail-empty {
 	padding: 20px 14px;
@@ -1635,9 +1815,22 @@ main {
 	flex: 1;
 	font-size: 13.5px;
 }
-.gb-head .icon-btn {
-	width: 24px;
-	height: 24px;
+/* JS 注入的是裸按钮（不带 icon-btn 类），按直接子元素匹配 */
+.gb-head > button {
+	flex: 0 0 auto;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	line-height: 1;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 6px;
+	color: var(--text-dim);
+}
+.gb-head > button:hover {
+	color: var(--text);
+	background: var(--bg3);
 }
 .guide-box {
 	font-size: 13px;

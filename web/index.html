@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
@@ -8,7 +8,7 @@
       rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%238b7cf8'/><stop offset='1' stop-color='%235b46e0'/></linearGradient><linearGradient id='t' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%23ffffff' stop-opacity='.28'/><stop offset='1' stop-color='%23ffffff' stop-opacity='0'/></linearGradient></defs><rect x='1' y='1' width='30' height='30' rx='7' fill='url(%23g)'/><rect x='1' y='1' width='30' height='16' rx='7' fill='url(%23t)'/><g stroke='%23ffffff' stroke-width='1.7' stroke-linecap='round' fill='none'><line x1='6.5' y1='8.3' x2='12.3' y2='13.0'/></g><polygon points='18.2,6.8 18.4,14.1 22.1,17.0 17.4,17.9 13.8,24.2 13.6,16.9 9.9,14.0 14.6,13.1' fill='%23ffffff'/><circle cx='26' cy='9' r='0.7' fill='rgba(255,255,255,.7)'/><circle cx='27' cy='23' r='0.6' fill='rgba(255,255,255,.6)'/><circle cx='6' cy='26' r='0.6' fill='rgba(255,255,255,.55)'/></svg>"
     />
-    <link rel="stylesheet" href="style.css?v=20260903h" />
+    <link rel="stylesheet" href="style.css?v=20260903l" />
   </head>
   <body class="dark">
     <script>
@@ -16,6 +16,7 @@
       try {
         var t = localStorage.getItem("starchart-theme");
         if (t === "light" || t === "dark") document.body.className = t;
+        else if (!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches)) document.body.className = "light";
       } catch (e) {}
     </script>
     <header id="topbar">
@@ -357,6 +358,6 @@
       </div>
     </div>
 
-    <script src="app.js?v=20260903h"></script>
+    <script src="app.js?v=20260903l"></script>
   </body>
 </html>

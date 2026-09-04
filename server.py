@@ -4,10 +4,12 @@
 仅监听 127.0.0.1。
 """
 
+import atexit
 import base64
 import io
 import json
 import os
+import queue
 import re
 import shutil
 import socket
@@ -15,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 import fnmatch
 import hashlib
@@ -182,7 +185,7 @@ def default_config():
             ".venv",
         ],
         "api": {"provider": "zhipu", "baseUrl": "", "apiKey": "", "model": ""},
-        "editor": {"name": "Trae", "cmd": 'trae "{path}"'},
+        "editor": {"name": "VS Code", "cmd": 'code "{path}"'},
         "backupDir": "",
         "theme": "auto",
         "gitStatus": True,  # 扫描时读取 Git 状态（分支 / 未提交 / 最后提交）
@@ -210,6 +213,25 @@ def load_config():
             if _config is None:
                 _config = default_config()
                 save_config()
+            else:
+                # 旧默认编辑器（Trae）一次性迁移为更通用的 VS Code——
+                # 仅当值与旧默认完全一致（即用户从未改过）时才替换
+                ed = _config.get("editor")
+                if (
+                    isinstance(ed, dict)
+                    and ed.get("name") == "Trae"
+                    and ed.get("cmd") == 'trae "{path}"'
+                ):
+                    _config["editor"] = {"name": "VS Code", "cmd": 'code "{path}"'}
+                    save_config()
+                # 结构兜底：旧版/手改过的 config 里 api/editor 可能缺失或非对象，
+                # 而设置保存路径会直接写 cfg["api"][...]，缺了这个 dict 会整页报错。
+                if not isinstance(_config.get("api"), dict):
+                    _config["api"] = {"provider": "zhipu", "baseUrl": "", "apiKey": "", "model": ""}
+                if not isinstance(_config.get("editor"), dict):
+                    _config["editor"] = {"name": "VS Code", "cmd": 'code "{path}"'}
+                if _config.get("theme") not in ("dark", "light", "auto"):
+                    _config["theme"] = "auto"
         return _config
 
 
@@ -338,6 +360,45 @@ def save_data():
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_data, f, ensure_ascii=False, indent=2)
         os.replace(tmp, DATA_FILE)
+
+
+_saved_pending = False
+
+
+def save_data_debounced(delay=0.35):
+    """合并高频写（如批量生成介绍逐条写）：窗口内多次修改只落盘一次。
+
+    复用 save_data 的同步原子写；由后台线程兜底，进程退出 / 备份导出等
+    关键时刻用 flush_data 强制落盘防丢。
+    """
+    global _saved_pending
+    with LOCK:
+        if _saved_pending:
+            return  # 已有一次即将落盘，本次修改累积到 _data 里即可
+        _saved_pending = True
+    threading.Thread(target=_debounced_worker, args=(delay,), daemon=True).start()
+
+
+def _debounced_worker(delay):
+    time.sleep(delay)
+    with LOCK:
+        global _saved_pending
+        if not _saved_pending:
+            return
+        _saved_pending = False
+        save_data()
+
+
+def flush_data():
+    """强制立即落盘（备份导出/导入、进程退出前调用）。"""
+    with LOCK:
+        global _saved_pending
+        if _saved_pending:
+            _saved_pending = False
+            save_data()
+
+
+atexit.register(flush_data)
 
 
 # ---------------------------------------------------------------- 扫描
@@ -969,13 +1030,17 @@ def project_context(path):
 def ai_intro(path, cfg):
     readme, listing = project_context(path)
     user = f"项目名：{os.path.basename(path)}\n\nREADME 内容：\n{readme or '（无）'}\n\n目录结构：\n{listing or '（空）'}"
-    text = llm_chat(
-        "你是一个项目索引助手。根据项目的 README 和目录结构，用不超过30字的中文一句话说明该项目是做什么的。"
-        "只输出这句话本身，不要任何前缀、标点修饰或引号。",
-        user,
-        max_tokens=100,
-    )
-    return text[:60] if text else None
+    try:
+        text = llm_chat(
+            "你是一个项目索引助手。根据项目的 README 和目录结构，用不超过30字的中文一句话说明该项目是做什么的。"
+            "只输出这句话本身，不要任何前缀、标点修饰或引号。",
+            user,
+            max_tokens=100,
+        )
+        return text[:60] if text else None
+    except Exception as e:
+        log(f"AI 介绍请求失败 {path}：{e}")
+        return None
 
 
 def generate_intro(path):
@@ -995,7 +1060,8 @@ def generate_intro(path):
             return {"ok": False, "error": "项目节点已不存在（可能被重新扫描移除）"}
         node["intro"] = intro
         node["introSource"] = source if intro else ""
-        save_data()
+        # 批量生成时逐条调用，用合写（窗口内只落盘一次）避免 N 次全量写
+        save_data_debounced()
     return {
         "ok": True,
         "intro": intro,
@@ -1480,7 +1546,7 @@ def detect_editors():
 # ---------------------------------------------------------------- 探测缓存与白名单
 
 _detect_cache = {"ts": 0.0, "editors": [], "agents": []}
-DETECT_TTL = 300.0  # 注册表全表扫描较慢，5 分钟内复用结果
+DETECT_TTL = 600.0  # 注册表全表扫描较慢，10 分钟内复用结果
 
 
 def detect_all():
@@ -1521,6 +1587,7 @@ def backup_export(dest):
     while os.path.exists(out):
         out = os.path.join(dest, f"{name}-{i:02d}.zip")
         i += 1
+    flush_data()  # 先把窗口内合写的改动落盘，导出才不丢最新数据
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for f in (DATA_FILE, CONFIG_FILE):
             if os.path.isfile(f):
@@ -1548,8 +1615,9 @@ def backup_import(body):
         if "config.json" in names:
             with open(CONFIG_FILE, "wb") as f:
                 f.write(zf.read("config.json"))
-        global _data, _config
+        global _data, _config, _saved_pending
         with LOCK:
+            _saved_pending = False  # 取消可能尚未落盘的旧改动，避免覆盖刚导入的文件
             _data, _config = None, None
         load_config()
         load_data()
@@ -2182,6 +2250,88 @@ PORT = 6173  # main() 启动时回填，用于 Origin 校验
 _last_ui_open = 0.0
 
 
+# ---------------------------------------------------------------- 目录选择
+# 浏览器出于安全不暴露本地完整路径，<input type="file"> 也拿不到目录绝对路径，
+# 因此扫描根目录的选择由后端在本机弹出原生文件夹对话框，再把路径回传给页面。
+# 提示语用英文：PowerShell 经 subprocess 传参时中文会受控制台代码页影响。
+_PICK_PS = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Windows.Forms
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.WindowState = 'Minimized'
+$owner.ShowInTaskbar = $false
+$d = New-Object System.Windows.Forms.FolderBrowserDialog
+$d.Description = 'Select a folder to scan'
+$d.ShowNewFolderButton = $true
+if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
+    Write-Output $d.SelectedPath
+}
+$d.Dispose()
+$owner.Dispose()
+"""
+_pick_lock = threading.Lock()
+
+
+def pick_dir(timeout=300):
+    """弹出文件夹选择框，返回 (path, err)。
+
+    选中 → (绝对路径, None)；取消 → (None, None)；失败 → (None, 原因)。
+    会阻塞调用线程直到用户确认或超时，因此只应在独立请求线程里调用。
+    """
+    try:
+        p = subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-Command", _PICK_PS],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return None, "选择超时：窗口打开后 5 分钟内没有确认"
+    except Exception as e:
+        return None, "无法打开文件夹选择框：%s" % e
+    if p.returncode != 0:
+        return None, "文件夹选择框启动失败"
+    lines = (p.stdout or b"").decode("utf-8", "replace").strip().splitlines()
+    if not lines:
+        return None, None          # 用户点了取消
+    return lines[0].strip(), None
+
+
+def _port_occupant(port):
+    """查占用 TCP 端口的进程，返回 "PID xxx（进程名）"；查不到返回 None。"""
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano", "-p", "TCP"],
+            stdout=subprocess.PIPE,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout.decode("gbk", "replace")
+    except Exception:
+        return None
+    suffix = ":%d" % port
+    pids = set()
+    for ln in out.splitlines():
+        parts = ln.split()
+        if len(parts) >= 5 and parts[3] == "LISTENING" and parts[1].endswith(suffix):
+            pids.add(parts[4])
+    for pid in sorted(pids):
+        try:
+            t = subprocess.run(
+                ["tasklist", "/FI", "PID eq %s" % pid, "/FO", "CSV", "/NH"],
+                stdout=subprocess.PIPE,
+                timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            ).stdout.decode("gbk", "replace")
+            first = (t.strip().splitlines() or [""])[0]
+            name = first.split('","')[0].strip('"').strip()
+        except Exception:
+            name = ""
+        return "PID %s（%s）" % (pid, name or "未知进程")
+    return None
+
+
 def open_ui(url=None, min_interval=1.0):
     """打开（或唤起）星图界面，带去重：短时间内的多次唤起合并为一次。
 
@@ -2205,6 +2355,59 @@ def mask_config(cfg):
     if out.get("api", {}).get("apiKey"):
         out["api"]["apiKey"] = MASK
     return out
+
+
+# ---------------------------------------------------------------- 开机自启
+# 写 HKCU Run（当前用户），免管理员；删键即撤销，不改系统全局设置。
+AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+AUTOSTART_NAME = "StarChart"
+
+
+def autostart_status():
+    if winreg is None:
+        return False
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY) as k:
+            winreg.QueryValueEx(k, AUTOSTART_NAME)
+            return True
+    except OSError:
+        return False
+
+
+def _autostart_cmd():
+    pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    exe = pyw if os.path.isfile(pyw) else sys.executable
+    app = os.path.join(BASE_DIR, "tray_app.py")
+    return f'"{exe}" "{app}" --autostart'
+
+
+def set_autostart(enable):
+    if winreg is None:
+        return {"ok": False, "error": "非 Windows 环境，无法设置开机自启"}
+    try:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY) as k:
+            if enable:
+                winreg.SetValueEx(k, AUTOSTART_NAME, 0, winreg.REG_SZ, _autostart_cmd())
+            else:
+                try:
+                    winreg.DeleteValue(k, AUTOSTART_NAME)
+                except OSError:
+                    pass
+        return {"ok": True}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------- 日志尾部
+
+def read_log_tail(max_lines=200):
+    """读取 server.log 末尾若干行，供界面就地查看。"""
+    try:
+        with open(LOG_FILE, encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+        return "".join(lines[-max_lines:]) or "（暂无日志）"
+    except OSError:
+        return ""
 
 
 def pid_alive(pid):
@@ -2290,6 +2493,16 @@ class Handler(BaseHTTPRequestHandler):
         return o in (f"http://localhost:{PORT}", f"http://127.0.0.1:{PORT}")
 
     def do_GET(self):
+        try:
+            self._do_get()
+        except Exception as e:
+            log(f"处理失败 {self.path.split('?')[0]}：{e}\n{traceback.format_exc().rstrip()}")
+            try:
+                self._json({"ok": False, "error": "服务器内部错误，详情见日志"}, 500)
+            except Exception:
+                pass
+
+    def _do_get(self):
         path = self.path.split("?")[0]
         if path == "/api/tree":
             data = load_data()
@@ -2301,7 +2514,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "任务不存在或已清理"}, 404)
             return self._json(st)
         if path == "/api/config":
-            return self._json({"ok": True, "config": mask_config(load_config())})
+            c = mask_config(load_config())
+            c["autostart"] = autostart_status()
+            return self._json({"ok": True, "config": c})
         if path == "/api/doc":
             qs = parse_qs(urlparse(self.path).query)
             real = path_allowed(qs.get("path", [""])[0])
@@ -2330,6 +2545,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "editors": editors, "agents": agents})
         if path == "/api/status":
             return self._json({"ok": True, "scanning": _scanning})
+        if path == "/api/log":
+            return self._json({"ok": True, "log": read_log_tail()})
         if path == "/api/trending":
             qs = parse_qs(urlparse(self.path).query)
             r = fetch_trending(
@@ -2575,6 +2792,25 @@ class Handler(BaseHTTPRequestHandler):
                             str(body.get("lang") or ""),
                         )
                     )
+            if path == "/api/pick-dir":
+                # 同一时刻只允许一个选择窗口，避免连点弹出多个
+                if not _pick_lock.acquire(blocking=False):
+                    return self._json(
+                        {"ok": False, "error": "已有一个选择窗口打开，请先完成选择"})
+                try:
+                    picked, err = pick_dir()
+                finally:
+                    _pick_lock.release()
+                # 该线程为弹选择框阻塞了十几秒甚至更久，期间浏览器可能已把它
+                # 所在的 keep-alive 连接判定为超时关闭。这里显式关掉连接，
+                # 避免旧的半开连接被浏览器复用 → 下一次请求被 RST → 前端误报
+                # "服务未启动"（实际服务正常，重试即好）。
+                self.close_connection = True
+                if err:
+                    return self._json({"ok": False, "error": err})
+                if not picked:
+                    return self._json({"ok": True, "cancelled": True})
+                return self._json({"ok": True, "path": picked})
             if path == "/api/config":
                 body = self._body_json().get("config", {})
                 cfg = load_config()
@@ -2603,7 +2839,14 @@ class Handler(BaseHTTPRequestHandler):
                         if key and key != MASK:
                             cfg["api"]["apiKey"] = encrypt_api_key(key)
                     save_config()
-                return self._json({"ok": True, "config": mask_config(cfg)})
+                autostart_err = None
+                if "autostart" in body:
+                    ar = set_autostart(bool(body["autostart"]))
+                    if not ar.get("ok"):
+                        autostart_err = ar.get("error")
+                resp = mask_config(cfg)
+                resp["autostart"] = autostart_status()
+                return self._json({"ok": True, "config": resp, "autostartError": autostart_err})
             if path == "/api/config/test":
                 body = self._body_json()
                 api = dict(body)
@@ -2629,7 +2872,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(r)
             return self._json({"ok": False, "error": "unknown api"}, 404)
         except Exception as e:
-            log(f"处理失败 {path}：{e}")
+            log(f"处理失败 {path}：{e}\n{traceback.format_exc().rstrip()}")
             return self._json({"ok": False, "error": str(e)}, 500)
 
 
@@ -2669,9 +2912,25 @@ def create_server():
         threading.Timer(
             1.5, lambda: threading.Thread(target=_safe_auto_scan, daemon=True).start()
         ).start()
+    # 后台预热编辑器 / Agent 探测（注册表全表扫描较慢），首次点击不再卡顿
+    threading.Thread(target=detect_all, daemon=True).start()
     # 界面地址统一用 127.0.0.1 而非 localhost：服务只绑定 IPv4 loopback。
     # localhost 在部分环境（DNS、系统代理、localhost 解析到 ::1 等）下不确定，
     # 会出现「页面能打开、fetch 接口却连不上」。用 IP 直连是确定性连接目标。
+    # Windows 的 SO_REUSEADDR 允许第二个进程静默绑定已被监听的端口，导致两个
+    # 实例共存、请求被随机截胡（表现为「改了代码没生效 / unknown api」）。
+    # 因此绑定前先用一个不带 SO_REUSEADDR 的裸 socket 做真实占用检测。
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("127.0.0.1", port))
+    except OSError:
+        who = _port_occupant(port) or "未知进程"
+        raise OSError(
+            f"端口 {port} 已被 {who} 占用。"
+            "若是残留的旧实例，请结束它（taskkill /PID <pid> /F）或双击 stop.bat"
+        ) from None
+    finally:
+        probe.close()
     return ThreadingHTTPServer(("127.0.0.1", port), Handler), f"http://127.0.0.1:{port}"
 
 
