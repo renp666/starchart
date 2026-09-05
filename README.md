@@ -45,7 +45,6 @@ Note: the interface and the generated summaries are in Chinese.
 - [目录结构](#目录结构)
 - [安全说明](#安全说明)
 - [许可证](#许可证)
-- [相关文档](#相关文档)
 
 ## 为什么做这个
 
@@ -57,17 +56,13 @@ Note: the interface and the generated summaries are in Chinese.
 
 ## 界面预览
 
-<!--
-建议补 1~2 张截图，对 GitHub 上的第一印象帮助很大：
-
-  1. 主界面（左侧项目树 + 右侧详情面板）→ 存为 web/screenshot-main.png
-  2. 亮色主题或搜索效果（可选）        → 存为 web/screenshot-search.png
-
-放好后删掉本注释，启用下面两行：
-
 ![星图主界面](web/screenshot-main.png)
-![搜索与详情](web/screenshot-search.png)
--->
+
+左侧项目树（AI 一句话介绍 + 技术栈徽章 + Git 状态），右侧详情面板（一键打开编辑器 / 终端 / AI Agent，识别启动入口）。
+
+![拼音搜索](web/screenshot-search.png)
+
+搜索框直接打拼音首字母：输入 `zhjy` 秒中「智慧教育课程自动观看工具」。
 
 ## 功能特性
 
@@ -260,8 +255,6 @@ starchart\
 ├── make_icons.py      生成 favicon.ico / tray-64.png / icon-512.png
 ├── make_deluxe.py     生成 1024px 高清图标（AI 底图 + 精确线稿）
 ├── requirements.txt   可选依赖：pypinyin、pystray
-├── DESIGN.md          设计文档：数据结构 / API / 功能规格
-├── RELEASE_NOTES.md   版本说明
 └── web\
     ├── index.html     单页界面
     ├── app.js         前端逻辑
@@ -288,9 +281,3 @@ starchart\
 
 [MIT](LICENSE)
 
-## 相关文档
-
-- [设计文档](DESIGN.md) —— 数据结构、后端 API、功能规格、实现顺序
-- [版本说明](RELEASE_NOTES.md) —— 各版本的新增 / 修复 / 兼容性说明
-- [产品需求 · GitHub 趋势与中文导读](docs/PRD-GitHub趋势与中文导读.md) —— 功能需求 / 验收标准 / 优化 Backlog
-- [技术方案 · GitHub 趋势与中文导读](docs/TECH-GitHub趋势与中文导读.md) —— 架构 / API 契约 / 实现细节与坑 / 回归清单
