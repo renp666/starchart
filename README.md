@@ -13,6 +13,7 @@
 ![Python](https://img.shields.io/badge/python-3.7%2B-3776AB?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib-4ec9b0)
 ![Data](https://img.shields.io/badge/data-100%25_local-blueviolet)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 </div>
 
@@ -101,7 +102,8 @@ Note: the interface and the generated summaries are in Chinese.
 - **GitHub 趋势榜**：顶栏 🔥 打开。
   抓取 github.com/trending 官方榜单（服务端缓存 30 分钟），支持今日 / 本周 / 本月 ×
   19 种语言筛选、关键词过滤；配合 LLM 可为榜单项目一键生成**中文一句话介绍**（批量并发、
-  可中途停止）与**中文导读**（依据仓库 README 分点输出：是什么 / 核心要点 / 适合谁 / 上手建议），
+  可中途停止）与**中文导读**（参考 zread 的内容框架，依据仓库 README 输出五段式：
+  是什么 / 核心功能 / 技术架构 / 适用场景 / 上手指南），
   结果长期缓存；「本期速览」让 AI 通读整份榜单输出风向观察；也支持粘贴任意
   `owner/repo` 或 GitHub 链接直接生成导读。每张卡片可复制仓库地址
 - **自动扫描**：服务启动后若索引较旧（超过 1 小时）会在后台自动重新扫描，保持最新；
@@ -118,8 +120,8 @@ Note: the interface and the generated summaries are in Chinese.
 1. 双击 `start.bat` —— 自动检查依赖，以后台方式启动，图标出现在系统托盘
 2. 左键托盘图标打开界面；之后随时可按 **Ctrl+Alt+S** 唤起
 3. 首次使用点右上角「⟳ 扫描」建立索引
-4. 配置 AI（可选）：⚙ 设置里选服务商、填 API Key、点「测试连接」，
-   再点「✨ 生成介绍」批量生成中文描述
+4. 配置 AI（可选）：⚙ 设置 → 模型设置里「＋ 添加模型」选厂商、去推荐区的申请入口
+   拿一个免费 Key 填入、点「测试连接」，再回主界面点「✨ 生成介绍」批量生成中文描述
 5. 右键托盘图标 →「退出」结束；也可双击 `stop.bat`
 
 托盘常驻模式不留控制台窗口。想看日志或排查启动问题，运行 `start-console.bat`。
@@ -143,19 +145,24 @@ pip install -r requirements.txt
 
 ## 配置 AI 介绍生成
 
-设置界面的 LLM 配置全部在工具内完成，无需改文件：
+设置 → 模型设置，全部在工具内完成，无需改文件：
 
-- **服务商预设**：智谱（`glm-4-flash`，免费档）、硅基流动
-  （`Qwen/Qwen2.5-7B-Instruct`，免费档）、自定义 OpenAI 兼容地址（手填 baseUrl / model）
-- **API Key**：输入框掩码显示，保存时经 Windows DPAPI 加密写入 `config.json`
-- **测试连接**：发一条最小请求，实时显示成功 / 失败原因
+- **模型条目**：像 zcode 一样维护一个模型列表——「＋ 添加模型」从厂商模板
+  （智谱 / 硅基流动 / 通义千问 / DeepSeek / 自定义 OpenAI 兼容）下拉选择，
+  自动带入 API 地址与默认模型名；**单选哪条，哪条生效**
+- **API Key**：密码框 + 小眼睛按需查看；保存时经 Windows DPAPI 加密写入 `config.json`，
+  界面回显永远是掩码
+- **测试连接**：针对每条模型发一条最小请求，实时显示成功 / 失败原因
+- **不预置任何 Key**：内置的免费模型推荐区附各家申请入口直达链接，Key 属于你的私人资产
 
-推荐的免费服务（国内直连、OpenAI 兼容）：
+推荐的免费服务（国内直连、OpenAI 兼容，设置页内附申请入口）：
 
 | 服务商 | baseUrl | model |
 |---|---|---|
 | 智谱 | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` |
 | 硅基流动 | `https://api.siliconflow.cn/v1` | `Qwen/Qwen2.5-7B-Instruct` |
+| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-turbo` |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
 
 ## 数据存放位置
 
@@ -279,8 +286,7 @@ starchart\
 
 ## 许可证
 
-本项目尚未添加 `LICENSE` 文件。如果要公开分发，建议先补一个
-（MIT 或 Apache-2.0 是常见选择），并在本小节注明。
+[MIT](LICENSE)
 
 ## 相关文档
 

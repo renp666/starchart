@@ -1906,79 +1906,76 @@ main {
 .tr-drawer-head {
 	display: flex;
 	align-items: center;
-	justify-content: flex-end;
+	justify-content: space-between;
 	gap: 8px;
-	padding: 12px 14px;
+	padding: 10px 14px;
 	border-bottom: 1px solid var(--border);
 	flex: 0 0 auto;
+	background: var(--bg2);
+}
+.tr-drawer-head.hidden {
+	display: none;
+}
+/* 抽屉标题槽：导读/速览打开时由 JS 填充 */
+.tr-drawer-title {
+	flex: 1;
+	font-size: 13px;
+	font-weight: 650;
+	color: var(--text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .tr-drawer-body {
 	flex: 1;
 	overflow-y: auto;
-	padding: 14px;
+	padding: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 14px;
-}
-.tr-drawer-body > * {
-	flex: 0 0 auto;
 }
 
-/* 抽屉内结果面板 */
+/* 抽屉内结果面板：整块卡片化，配一层柔和底色与描边分区 */
 .guide-panel.hidden,
 .digest-box.hidden {
 	display: none !important;
 }
-.gb-head {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	margin-bottom: 12px;
-	padding-bottom: 10px;
-	border-bottom: 1px solid var(--border);
-}
-.gb-head strong {
-	flex: 1;
-	font-size: 13.5px;
-}
-/* JS 注入的是裸按钮（不带 icon-btn 类），按直接子元素匹配 */
-.gb-head > button {
-	flex: 0 0 auto;
-	width: 28px;
-	height: 28px;
-	padding: 0;
-	line-height: 1;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	border-radius: 6px;
-	color: var(--text-dim);
-}
-.gb-head > button:hover {
-	color: var(--text);
-	background: var(--bg3);
+.guide-panel,
+.digest-box {
+	margin: 14px 14px 14px;
+	padding: 14px 16px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--bg);
+	box-shadow: var(--shadow);
 }
 .guide-box {
 	font-size: 13px;
 	line-height: 1.8;
 }
-.guide-box ul {
+.guide-box ul,
+.digest-body ul {
 	padding-left: 18px;
 }
-.guide-box li {
+.guide-box li,
+.digest-body li {
 	margin: 4px 0;
 }
-.guide-box code {
+.guide-box code,
+.digest-body code {
 	font-family: var(--font-mono);
 	font-size: 12px;
 	background: var(--bg3);
 	padding: 1px 6px;
 	border-radius: 5px;
 }
-.guide-box .hint {
+/* 尾注：卡片底部的弱化来源说明 */
+.guide-foot,
+.digest-body .hint:last-child {
 	margin-top: 12px;
 	padding-top: 10px;
 	border-top: 1px dashed var(--border);
+	font-size: 11.5px;
+	color: var(--text-dim);
 }
 .digest-box {
 	font-size: 12.5px;
@@ -2008,17 +2005,26 @@ main {
 }
 /* 导读小节标题（功能/架构/场景）：比 KV 更醒目的分节点 */
 .ai-sec {
-	margin: 10px 0 2px;
+	margin: 14px 0 4px;
 	font-size: 12px;
 	font-weight: 650;
-	color: var(--accent);
+	color: var(--text-dim);
 	letter-spacing: 0.03em;
 }
+.ai-sec:first-child {
+	margin-top: 2px;
+}
 .ai-sec b {
-	padding: 1px 8px;
+	display: inline-block;
+	margin-right: 4px;
+	padding: 1px 9px;
 	background: var(--accent-soft);
-	border-radius: 5px;
-	margin-right: 2px;
+	color: var(--accent);
+	border-radius: 999px;
+	font-size: 11.5px;
+}
+.ai-sec + .ai-ul {
+	margin-top: 2px;
 }
 .ai-kv .ai-k {
 	display: inline-block;

@@ -670,11 +670,11 @@ function collectPending(node, out) {
 	if (!node) return;
 	if (node.marked === "off") return; // 排除的整棵子树不参与
 	if (node.type === "project") {
-		// 与后端 run_scan 判定一致：只统计"还没有任何介绍"的项目。
-		// 生成成功（非空介绍）即不再计入；不把"静态介绍待 AI 升级 / 内容变化"
-		// 计入——否则这类项目在 AI 升级失败时会反复挂着"(1)"，出现
-		// "提示全部完成却仍显示还有 N 个待生成"的假象。
-		if (!node.intro) out.push(node.path);
+		// 待生成口径：完全没介绍的 + 仅"静态提取 README 首行"的（AI 未跑过、
+		// 质量无保证）。已有 AI 生成或手动编辑的不计入，避免反复重刷。
+		// 不把"AI 升级失败/内容变化"计入——否则会出现"提示全部完成
+		// 却仍显示还有 N 个"的假象。
+		if (!node.intro || node.introSource === "static") out.push(node.path);
 	}
 	for (const c of node.children || []) collectPending(c, out);
 }
@@ -2283,9 +2283,9 @@ function openSettings() {
 					}
 					if (kin.value === MASK_JS) {
 						try {
-							const r = await api(
-								"/api/config/modelkey?id=" + encodeURIComponent(e.id),
-							);
+							const r = await api("/api/config/modelkey", {
+								id: e.id,
+							});
 							if (r.ok && r.key) {
 								revealed = r.key;
 								kin.value = r.key;
@@ -2783,10 +2783,21 @@ function renderAIBlock(text) {
 			ln.startsWith("架构：") ||
 			ln.startsWith("场景：")
 		) {
-			// 导读小节标题（新格式）：accent 强调，后跟说明文字
+			// 导读小节标题（新格式）：accent 强调。LLM 偶尔会把首条列表直接
+			// 输出在标题行（"功能：- xxx"）——拆出来按列表项渲染，不粘连。
 			const [k, ...rest] = ln.split("：");
-			const tail = rest.join("：").trim();
+			let tail = rest.join("：").trim();
+			let leadBullet = "";
+			if (tail.startsWith("- ")) {
+				leadBullet = tail.slice(2).trim();
+				tail = "";
+			}
 			html += `<div class='ai-sec'><b>${esc(k)}</b>${tail ? " · " + esc(tail) : ""}</div>`;
+			if (leadBullet) {
+				html += "<ul class='ai-ul'>";
+				html += `<li>${escHtml(leadBullet)}</li>`;
+				inList = true;
+			}
 		} else if (ln.startsWith("适合：") || ln.startsWith("上手：")) {
 			const [k, ...rest] = ln.split("：");
 			html += `<div class='ai-kv'><span class='ai-k'>${esc(k)}</span>${escHtml(rest.join("："))}</div>`;
@@ -3001,18 +3012,15 @@ function showGuide(name, text, cached) {
 	if (!box) return;
 	box.classList.remove("hidden");
 	trendRailOpen();
+	// 标题升到抽屉头部（统一的标题槽，关闭按钮只在头部出现一次）
+	const head = $(".tr-drawer-head");
+	const titleEl = $("#tr-drawer-title");
+	if (head) head.classList.remove("hidden");
+	if (titleEl) titleEl.textContent = `📖 中文导读 · ${name}`;
 	// pi-lens-ignore: no-inner-html-js
 	box.innerHTML = `
-    <div class="gb-head"><strong>📖 中文导读 · ${esc(name)}</strong>
-      <button id="tr-guide-close" title="收起导读" aria-label="收起导读">✕</button></div>
     <div class="guide-box">${renderAIBlock(text)}</div>
-    <div class="hint">由设置中的 LLM 依据 README 生成${cached ? "（缓存）" : ""}，仅供参考；细节以仓库原文为准。</div>`;
-	const close = $("#tr-guide-close");
-	if (close)
-		close.addEventListener("click", () => {
-			box.classList.add("hidden");
-			trendRailOpen();
-		});
+    <div class="guide-foot">由设置中的 LLM 依据 README 生成${cached ? "（缓存）" : ""}，仅供参考；细节以仓库原文为准。</div>`;
 	requestAnimationFrame(() => trendScrollPanel(box));
 }
 
@@ -3086,19 +3094,16 @@ async function trendDigest() {
 		"",
 	])[1];
 	const scopeLabel = trend.lang ? sinceLabel + " · " + trend.lang : sinceLabel;
+	// 标题升到抽屉头部；正文放 digest-body
+	const head = $(".tr-drawer-head");
+	const titleEl = $("#tr-drawer-title");
+	if (head) head.classList.remove("hidden");
+	if (titleEl) titleEl.textContent = `📋 本期速览 · ${scopeLabel}`;
 	// pi-lens-ignore: no-inner-html-js
 	box.innerHTML = `
-    <div class="gb-head"><strong>📋 本期速览 · ${esc(scopeLabel)}</strong>
-      <button id="tr-digest-close" title="收起速览" aria-label="收起速览">✕</button></div>
     <div class="digest-body"><div class="hint">正在让 AI 通读榜单并总结…（约需十几秒）</div></div>`;
 	box.classList.remove("hidden");
 	trendRailOpen();
-	const close = $("#tr-digest-close");
-	if (close)
-		close.addEventListener("click", () => {
-			box.classList.add("hidden");
-			trendRailOpen();
-		});
 	try {
 		const r = await api("/api/trending/digest", {
 			since: trend.since,
@@ -3189,9 +3194,11 @@ function syncViewTabs() {
 }
 
 function resetTrendPanels() {
-	// 收起阅读栏（批量任务不中断，轮询照常）
+	// 收起阅读栏（批量任务不中断，轮询照常）：内容与头部标题一并收起，
+	// 避免留下只有关闭按钮的空标题条
 	$("#tr-guide-box")?.classList.add("hidden");
 	$("#tr-digest-box")?.classList.add("hidden");
+	$(".tr-drawer-head")?.classList.add("hidden");
 	trendRailOpen();
 }
 

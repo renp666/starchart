@@ -2488,6 +2488,9 @@ def mask_config(cfg):
             out["api"]["apiKey"] = MASK
         out["api"].pop("apiKeys", None)
     out.pop("apiProfiles", None)  # 旧字段已迁移，不再回传前端
+    # GitHub Token 同属私密凭据：有=掩码、无=空串，与 apiKey 同标准
+    if out.get("ghToken"):
+        out["ghToken"] = MASK
     # 模型条目：key 有=掩码、无=空串
     m = out.get("model")
     if isinstance(m, dict) and isinstance(m.get("entries"), list):
@@ -2632,8 +2635,18 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return o in (f"http://localhost:{PORT}", f"http://127.0.0.1:{PORT}")
 
+    def _host_ok(self):
+        """DNS rebinding 防线：攻击页把自身域名解析到 127.0.0.1 时，浏览器视其为
+        同源（不发 Origin），但 Host 头仍是攻击者域名。强制 Host 只能是本机
+        地址，rebinding 的请求在这里整体短路——覆盖 GET（modelkey 明文、ghToken）
+        与 POST（写 config → editor.cmd → shell=True）整条链。"""
+        h = (self.headers.get("Host") or "").strip().lower()
+        return h in (f"127.0.0.1:{PORT}", f"localhost:{PORT}")
+
     def do_GET(self):
         try:
+            if not self._host_ok():
+                return self._json({"ok": False, "error": "forbidden host"}, 403)
             self._do_get()
         except Exception as e:
             log(f"处理失败 {self.path.split('?')[0]}：{e}\n{traceback.format_exc().rstrip()}")
@@ -2657,30 +2670,6 @@ class Handler(BaseHTTPRequestHandler):
             c = mask_config(load_config())
             c["autostart"] = autostart_status()
             return self._json({"ok": True, "config": c})
-        if path == "/api/config/modelkey":
-            # 查看某模型条目的明文 key：仅限本机请求（_origin_ok 已拦跨站），
-            # 供设置页小眼睛按需查看。id=条目 id，缺省=当前生效条目。
-            qs = parse_qs(urlparse(self.path).query)
-            eid = (qs.get("id") or [""])[0]
-            cfg = load_config()
-            entries = (cfg.get("model") or {}).get("entries") or []
-            ent = None
-            for e in entries:
-                if e.get("id") == eid:
-                    ent = e
-                    break
-            if ent is None:
-                # 未指定/未命中：当前生效条目
-                if eid:
-                    return self._json({"ok": True, "key": ""})
-                ent = next(
-                    (e for e in entries if e.get("id") == cfg["model"].get("activeId")),
-                    None,
-                )
-            key = (ent or {}).get("apiKey", "")
-            return self._json(
-                {"ok": True, "key": api_key(dict(cfg, api={"apiKey": key}))}
-            )
         if path == "/api/doc":
             qs = parse_qs(urlparse(self.path).query)
             real = path_allowed(qs.get("path", [""])[0])
@@ -2743,9 +2732,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             path = "/index.html"
         fname = os.path.normpath(path.lstrip("/"))
-        if ".." in fname:
+        # 防穿越三重门：拒绝 `..`、拒绝绝对路径（Windows 上 join 遇绝对路径会
+        # 丢弃 WEB_DIR，`/c:/x` 即可读任意盘文件）、realpath 前缀校验兜底。
+        if ".." in fname or os.path.isabs(fname):
             return self._json({"ok": False, "error": "forbidden"}, 403)
         full = os.path.join(WEB_DIR, fname)
+        try:
+            real_full = os.path.realpath(full)
+            real_web = os.path.realpath(WEB_DIR) + os.sep
+            if not real_full.startswith(real_web):
+                return self._json({"ok": False, "error": "forbidden"}, 403)
+        except OSError:
+            return self._json({"ok": False, "error": "forbidden"}, 403)
         if not os.path.isfile(full):
             return self._json({"ok": False, "error": "not found"}, 404)
         ext = os.path.splitext(full)[1]
@@ -2768,12 +2766,38 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?")[0]
+        if not self._host_ok():
+            log(f"拒绝异常 Host 请求 {path} Host={self.headers.get('Host', '(无)')}")
+            return self._json({"ok": False, "error": "forbidden host"}, 403)
         if not self._origin_ok():
             log(f"拒绝跨站请求 {path} Origin={self.headers.get('Origin', '(无)')}")
             return self._json({"ok": False, "error": "拒绝跨站请求"}, 403)
         try:
             if path == "/api/scan":
                 return self._json(run_scan())
+            if path == "/api/config/modelkey":
+                # 查看某模型条目的明文 key：POST + Origin 校验 + Host 校验三重防线，
+                # 供设置页小眼睛按需查看。id=条目 id，缺省=当前生效条目。
+                body = self._body_json()
+                eid = str(body.get("id") or "")
+                cfg = load_config()
+                entries = (cfg.get("model") or {}).get("entries") or []
+                ent = None
+                for e in entries:
+                    if e.get("id") == eid:
+                        ent = e
+                        break
+                if ent is None:
+                    if eid:
+                        return self._json({"ok": True, "key": ""})
+                    ent = next(
+                        (e for e in entries if e.get("id") == cfg["model"].get("activeId")),
+                        None,
+                    )
+                key = (ent or {}).get("apiKey", "")
+                return self._json(
+                    {"ok": True, "key": api_key(dict(cfg, api={"apiKey": key}))}
+                )
             if path == "/api/intro":
                 body = self._body_json()
                 return self._json(generate_intro(body.get("path", "")))
