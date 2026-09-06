@@ -357,8 +357,12 @@ function renderNode(node, q, _isRoot, depth = 1) {
 	} else if (!q && isProject && node.intro) {
 		html += `<span class="intro-line">${esc(node.intro)}</span>`;
 	}
-	if (node.fileCount > 0 && node.type === "dir") {
-		html += `<span class="filecount">+${node.fileCount} 文件</span>`;
+	if (node.type === "dir") {
+		// 文件夹徽章：文件与子文件夹双计数，消除"+2 文件"到底是啥的歧义
+		const bits = [];
+		if (node.fileCount > 0) bits.push(`${node.fileCount} 文件`);
+		if (node.dirCount > 0) bits.push(`${node.dirCount} 文件夹`);
+		if (bits.length) html += `<span class="filecount">${bits.join(" · ")}</span>`;
 	}
 	if (node.git) {
 		if (node.git.dirty)
@@ -708,18 +712,40 @@ function renderDetail(node) {
 	// pi-lens-ignore: no-inner-html-js
 	d.innerHTML = "";
 
-	// ---- 项目名 + 介绍（紧凑） ----
+	// ---- 项目名 + 收藏（标题簇：身份信号 + 零代价切换） ----
+	const head = document.createElement("div");
+	head.className = "detail-head";
 	const h = document.createElement("h2");
 	// pi-lens-ignore: no-inner-html-js
 	h.innerHTML = `${node.type === "project" ? "🛠" : "📁"} ${highlight(node.name, searchQuery.trim().toLowerCase())}`;
-	d.appendChild(h);
+	head.appendChild(h);
+	// 收藏：★ 常用视图置顶 + 树行星标，零代价切换，放标题行（第二评审一致同意）
+	const starBtn = document.createElement("button");
+	starBtn.className = "star-btn" + (node.starred ? " on" : "");
+	starBtn.textContent = node.starred ? "★" : "☆";
+	starBtn.setAttribute("aria-pressed", String(!!node.starred));
+	starBtn.setAttribute("aria-label", node.starred ? "取消收藏" : "收藏");
+	starBtn.title = node.starred ? "取消收藏（常用视图置顶）" : "收藏（常用视图置顶）";
+	starBtn.addEventListener("click", () => doStar(node, !node.starred));
+	head.appendChild(starBtn);
+	d.appendChild(head);
 
 	const meta = document.createElement("div");
 	meta.className = "meta";
 	// pi-lens-ignore: no-inner-html-js
 	meta.innerHTML = `
     路径：<code title="点击复制">${esc(node.path)}</code><br>
-    修改：${fmtTime(node.mtime)}${node.fileCount ? `　·　${node.fileCount} 个文件` : ""}${
+    修改：${fmtTime(node.mtime)}${
+				node.type === "dir"
+					? `${
+							node.fileCount
+								? `　·　${node.fileCount} 个文件`
+								: ""
+						}${node.dirCount ? `　·　${node.dirCount} 个子文件夹` : ""}`
+					: node.fileCount
+						? `　·　根目录 ${node.fileCount} 个文件`
+						: ""
+			}${
 			node.introSource
 				? `　·　${{ ai: "AI 生成", static: "README 提取", manual: "手动编辑" }[node.introSource] || node.introSource}`
 				: ""
@@ -790,9 +816,13 @@ function renderDetail(node) {
 	if (node.type === "project") {
 		const box = document.createElement("div");
 		box.className = "intro-box" + (node.intro ? "" : " empty");
-		box.textContent =
-			node.intro || "暂无介绍 —— 点击编辑，或用顶栏「生成介绍」";
 		box.title = "点击编辑介绍";
+		// 可编辑暗示：右侧常驻淡色铅笔，hover 加深 + 描边变 accent
+		// pi-lens-ignore: no-inner-html-js
+		box.innerHTML =
+			`<span class="intro-text">${esc(
+				node.intro || "暂无介绍 —— 点击编辑，或用顶栏「生成介绍」",
+			)}</span><span class="intro-edit-hint" aria-hidden="true">✎</span>`;
 		box.addEventListener("click", () => editIntro(node));
 		d.appendChild(box);
 	}
@@ -809,19 +839,19 @@ function renderDetail(node) {
 	if (launchers.length === 1) {
 		const l = launchers[0];
 		// pi-lens-ignore: no-inner-html-js
-		launchCard.innerHTML = `<div class="card-icon">▶</div><div class="card-label">${esc(l.label)}</div><div class="card-sub">本地启动</div>`;
+		launchCard.innerHTML = `<div class="card-icon">▶</div><div class="card-text"><div class="card-label">${esc(l.label)}</div><div class="card-sub">本地启动</div></div>`;
 		launchCard.title = "在新终端启动";
 		launchCard.addEventListener("click", () => doLaunch(node, l));
 	} else if (launchers.length > 1) {
 		// pi-lens-ignore: no-inner-html-js
-		launchCard.innerHTML = `<div class="card-icon">▶</div><div class="card-label">启动项目</div><div class="card-sub">${launchers.length} 个入口</div>`;
+		launchCard.innerHTML = `<div class="card-icon">▶</div><div class="card-text"><div class="card-label">启动项目</div><div class="card-sub">${launchers.length} 个入口</div></div>`;
 		launchCard.title = "选择启动入口";
 		launchCard.addEventListener("click", () =>
 			showLaunchMenu(launchCard, node, launchers),
 		);
 	} else {
-		// pi-lens-ignore: no-inner-html-js
-		launchCard.innerHTML = `<div class="card-icon">▶</div><div class="card-label">无启动入口</div><div class="card-sub">未检测到</div>`;
+	// pi-lens-ignore: no-inner-html-js
+	launchCard.innerHTML = `<div class="card-icon">▶</div><div class="card-text"><div class="card-label">无启动入口</div><div class="card-sub">未检测到</div></div>`;
 	}
 	cards.appendChild(launchCard);
 
@@ -888,7 +918,7 @@ function renderDetail(node) {
 	// pi-lens-ignore: no-inner-html-js
 	openCard.innerHTML =
 		`<div class="card-icon">${ways.length === 1 ? ways[0].icon : "⇱"}</div>` +
-		`<div class="card-label">${esc(cardLabel)}</div><div class="card-sub">${esc(cardSub)}</div>`;
+		`<div class="card-text"><div class="card-label">${esc(cardLabel)}</div><div class="card-sub">${esc(cardSub)}</div></div>`;
 	openCard.title = missing.length
 		? "项目期待但未安装：" + missing.join("、")
 		: ways.length === 1
@@ -906,68 +936,53 @@ function renderDetail(node) {
 	}
 	cards.appendChild(openCard);
 
-	// ---- 次级操作菜单（⋯） ----
-	const moreWrap = document.createElement("div");
-	moreWrap.className = "more-menu-wrap";
-	moreWrap.style.marginBottom = "16px";
-	const moreBtn = document.createElement("button");
-	moreBtn.textContent = "⋯ 更多操作";
-	moreBtn.title = "资源管理器 / 复制路径 / 终端 / 编辑介绍 / 排除项目";
-	moreWrap.appendChild(moreBtn);
-	const menu = document.createElement("div");
-	menu.className = "more-menu hidden";
-	moreWrap.appendChild(menu);
-
-	const mi = (label, fn) => {
+	// ---- 快捷路径操作条：高频 3 项常驻可见（原藏在 ⋯ 菜单里，两跳变一跳）----
+	const quick = document.createElement("div");
+	quick.className = "quick-actions";
+	const qa = (label, title, fn) => {
 		const b = document.createElement("button");
 		b.textContent = label;
-		b.addEventListener("click", (ev) => {
-			ev.stopPropagation();
-			closeOpenMoreMenu();
-			fn();
-		});
-		menu.appendChild(b);
+		b.title = title;
+		b.addEventListener("click", fn);
+		quick.appendChild(b);
 	};
-	mi("📂 资源管理器", () => {
+	qa("📂 资源管理器", "在资源管理器中打开项目目录（10 秒内同目录不重复打开）", () => {
 		const now = Date.now();
-		if (now - (lastExplorer[node.path] || 0) < 1500) {
-			toast("资源管理器刚已打开");
+		if (now - (lastExplorer[node.path] || 0) < 10000) {
+			toast("该目录的窗口刚已打开（10 秒内不重复打开）");
 			return;
 		}
 		lastExplorer[node.path] = now;
 		openPath(node.path, "explorer");
 	});
-	mi("⧉ 复制路径", () => {
+	qa("⧉ 复制路径", "复制项目完整路径到剪贴板", () => {
 		navigator.clipboard
 			.writeText(node.path)
 			.then(() => toast("已复制路径"))
 			.catch(() => toast("复制失败", true));
 	});
-	mi("▶ 终端", () => openPath(node.path, "terminal"));
-	mi("✏ 编辑介绍", () => editIntro(node));
-	mi(node.starred ? "☆ 取消收藏" : "★ 收藏", () => doStar(node, !node.starred));
-	mi("🏷 标签 / 备注", () => editMeta(node));
+	qa("▶ 终端", "打开系统终端并 cd 到项目目录", () =>
+		openPath(node.path, "terminal"),
+	);
+	// 管理类：排除（项目）/ 标为项目（目录）——已有确认弹窗 + 撤销 toast 双防护
+	const mgBtn = document.createElement("button");
+	mgBtn.className = "mg-btn";
 	if (node.type === "project") {
-		mi("✖ 排除此项目", () => confirmExclude(node));
+		mgBtn.textContent = "⊘ 排除";
+		mgBtn.title = "排除此项目（不再显示，可撤销；已排除项目见顶栏 🗑）";
+		mgBtn.setAttribute("aria-label", "排除此项目");
+		mgBtn.addEventListener("click", () => confirmExclude(node));
 	} else {
-		mi("📌 标为项目", () => doMark(node, "manual"));
+		mgBtn.textContent = "📌 标为项目";
+		mgBtn.title = "手动标记为项目（依据标志物自动识别之外）";
+		mgBtn.setAttribute("aria-label", "标为项目");
+		mgBtn.addEventListener("click", () => doMark(node, "manual"));
 	}
-	mi("🗑 已排除的项目…", openExcluded);
+	quick.appendChild(mgBtn);
+	d.appendChild(quick);
 
-	// ⋯ 按钮：开/关由模块级 openMoreMenu 状态与 init 中的常驻 document 监听协同处理
-	// （⋯ 按钮 stopPropagation，打开的那次点击不会冒泡到 document 误触关闭）
-	moreBtn.addEventListener("click", (e) => {
-		e.stopPropagation();
-		if (openMoreMenu === menu) {
-			closeOpenMoreMenu();
-		} else {
-			closeOpenMoreMenu();
-			menu.classList.remove("hidden");
-			openMoreMenu = menu;
-		}
-	});
-
-	d.appendChild(moreWrap);
+	// （原「⋯ 更多操作」菜单已移除：编辑介绍→介绍框、标签备注→标签行、
+	//   收藏→标题簇、排除/标为项目→快捷条、已排除管理→顶栏 🗑，全部有归所）
 
 	// ---- 运行状态区 ----
 	if (node.type === "project") {
@@ -1055,17 +1070,11 @@ function renderDetail(node) {
 	if (node.type === "project") {
 		d.appendChild(sectionTitle("使用说明"));
 		const docBtn = document.createElement("button");
-		docBtn.textContent = "📖 查看使用说明";
+		// 默认展开（用户诉求）；doc-box 有 max-height 360px 内滚动，长 README 不撑爆面板
+		docBtn.textContent = "📖 收起说明";
 		const docBox = document.createElement("div");
-		docBox.className = "doc-box hidden";
-		docBtn.addEventListener("click", async () => {
-			if (!docBox.classList.contains("hidden")) {
-				docBox.classList.add("hidden");
-				docBtn.textContent = "📖 查看使用说明";
-				return;
-			}
-			docBtn.textContent = "📖 收起说明";
-			docBox.classList.remove("hidden");
+		docBox.className = "doc-box";
+		const loadDoc = async () => {
 			if (!docCache[node.path]) {
 				// pi-lens-ignore: no-inner-html-js
 				docBox.innerHTML = `<span class="hint-line">加载中…</span>`;
@@ -1089,9 +1098,15 @@ function renderDetail(node) {
 			docBox.innerHTML =
 				(c.file ? `<div class="doc-file">来源：${esc(c.file)}</div>` : "") +
 				c.html;
+		};
+		docBtn.addEventListener("click", () => {
+			const open = !docBox.classList.contains("hidden");
+			docBox.classList.toggle("hidden", open);
+			docBtn.textContent = open ? "📖 查看使用说明" : "📖 收起说明";
 		});
 		d.appendChild(docBtn);
 		d.appendChild(docBox);
+		loadDoc(); // 默认展开：构建后立即按需加载（有缓存则秒出）
 	}
 }
 
@@ -1224,8 +1239,8 @@ function showRowMenu(e, node) {
 		"📂 资源管理器",
 		() => {
 			const now = Date.now();
-			if (now - (lastExplorer[node.path] || 0) < 1500) {
-				toast("资源管理器刚已打开");
+			if (now - (lastExplorer[node.path] || 0) < 10000) {
+				toast("该目录的窗口刚已打开（10 秒内不重复打开）");
 				return;
 			}
 			lastExplorer[node.path] = now;
@@ -1368,12 +1383,57 @@ function mdToHtml(md) {
 			inQuote = false;
 		}
 	};
-	const inline = (s) =>
-		esc(s)
+	// 行内渲染：先转义防 XSS，再把 README 里常见的裸 HTML 转成安全等价物——
+	// 否则 <div>/<img>/<br> 这类标签会以 <> 代码形式漏进正文。
+	// 按 code span 分段：代码内内容保持字面（`<b>` 就该显示 <b>）。
+	// 属性段可能含被转义的引号（&quot;）与 URL 实体（&amp;），
+	// 用 (?:[^&]|&(?!gt;))*? 跨过它们、只在真正的 &gt; 收口。
+	const inline = (s) => {
+		let t = esc(s)
 			.replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-			.replace(/\[([^\]]*)\]\(([^)]*)\)/g, "$1")
+			.replace(/\[([^\]]*)\]\(([^)]*)\)/g, "$1");
+		const SAFE_FMT =
+			/&lt;(\/?)(b|strong|i|em|u|s|del|ins|sub|sup|kbd|samp|small|mark)&gt;/gi;
+		const WRAP_TAG =
+			/&lt;\/?(details|summary|div|span|p|center|section|article|header|footer|font|a|table|thead|tbody|tr|td|th)((?:[^&]|&(?!gt;))*?)?&gt;/gi;
+		t = t
+			.split(/(`[^`]*`)/g)
+			.map((seg) => {
+				if (seg.startsWith("`") && seg.endsWith("`") && seg.length > 1)
+					return seg; // 代码段保持字面
+				return seg
+					// 换行 / 分隔
+					.replace(/&lt;br\s*\/?&gt;/gi, "<br>")
+					.replace(/&lt;hr\s*\/?&gt;/gi, "<hr>")
+					// 注释整段去掉；script/style 连内容一起去掉
+					.replace(/&lt;!--[\s\S]*?--&gt;/g, "")
+					.replace(/&lt;script[\s\S]*?&lt;\/script&gt;/gi, "")
+					.replace(/&lt;style[\s\S]*?&lt;\/style&gt;/gi, "")
+					// 图片：只保留远程图并重建干净标签（白名单属性，防属性注入；
+					// 本地相对路径在本工具里必然 404，直接去掉）
+					.replace(/&lt;img\s+([\s\S]*?)&gt;/gi, (m, attrs) => {
+						const src = (
+							attrs.match(
+								/src=&quot;(https?:(?:[^&]|&(?!quot;))*?)&quot;/i,
+							) || []
+						)[1];
+						if (!src) return "";
+						const alt = (
+							attrs.match(/alt=&quot;((?:[^&]|&(?!quot;))*?)&quot;/i) || []
+						)[1];
+						return `<img src="${src}" alt="${alt || ""}" loading="lazy">`;
+					})
+					// 无害格式标签：剥属性保留裸标签（保留开/闭）
+					.replace(SAFE_FMT, (m, sl, tag) => `<${sl}${tag.toLowerCase()}>`)
+					// 包裹/结构标签：剥壳留内容（对齐、折叠等 GitHub 特性不支持，
+					// 但不再显示标签代码）
+					.replace(WRAP_TAG, "");
+			})
+			.join("");
+		return t
 			.replace(/`([^`]+)`/g, "<code>$1</code>")
 			.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+	};
 
 	const sepRe = /^\s*\|?[\s\-:|]+\|?\s*$/;
 	const isTableSep = (s) => sepRe.test(s) && s.includes("-");

@@ -632,6 +632,30 @@ main {
 	margin-bottom: 16px;
 	line-height: 1.7;
 	cursor: text;
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	transition: border-color 0.15s;
+}
+/* 可编辑暗示：右侧淡铅笔，hover 时加深 + 描边变 accent */
+#detail .intro-box .intro-text {
+	flex: 1;
+	min-width: 0;
+}
+#detail .intro-box .intro-edit-hint {
+	flex: 0 0 auto;
+	color: var(--border);
+	font-size: 13px;
+	transition: color 0.15s;
+}
+#detail .intro-box:hover {
+	border-color: var(--focus);
+}
+#detail .intro-box:hover .intro-edit-hint {
+	color: var(--accent);
+}
+#detail .intro-box.empty .intro-edit-hint {
+	color: var(--text-dim);
 }
 #detail .intro-box .src {
 	color: var(--text-dim);
@@ -702,6 +726,18 @@ main {
 	overflow: auto;
 	line-height: 1.75;
 	margin-top: 10px;
+}
+/* README 里的远程图片（徽章/logo）：不撑破容器，自身按内容比例显示 */
+#detail .doc-box img {
+	max-width: 100%;
+	height: auto;
+	vertical-align: middle;
+	margin: 2px 4px 2px 0;
+}
+/* 剥壳后的块级包裹标签（div/center/p）至少保持段落间距 */
+#detail .doc-box div,
+#detail .doc-box p {
+	margin: 4px 0;
 }
 #detail .doc-box .doc-file {
 	font-size: 11px;
@@ -1203,8 +1239,75 @@ main {
 /* ---------- 操作卡 ---------- */
 .action-cards {
 	display: flex;
-	gap: 10px;
-	margin-bottom: 16px;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+/* 快捷路径操作条：高频 3 项常驻（资源管理器 / 复制路径 / 终端）+ 管理项 */
+.quick-actions {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+.quick-actions button {
+	flex: 1;
+	min-width: 0;
+	padding: 8px 6px;
+	font-size: 12px;
+	border-radius: var(--r-s);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* 管理类（排除/标为项目）：与路径操作同层但视觉降级，避免顺手误触 */
+.quick-actions .mg-btn {
+	flex: 0 0 auto;
+	color: var(--text-dim);
+	background: transparent;
+	border-style: dashed;
+}
+.quick-actions .mg-btn:hover {
+	color: var(--bad);
+	border-color: var(--bad);
+	background: transparent;
+}
+/* 详情标题簇：项目名 + 收藏（零代价切换，放标题行） */
+.detail-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 2px;
+}
+.detail-head h2 {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.star-btn {
+	flex: 0 0 auto;
+	width: 36px;
+	height: 36px;
+	padding: 0;
+	border: none;
+	background: none;
+	font-size: 20px;
+	line-height: 1;
+	color: var(--text-dim);
+	border-radius: 8px;
+	transition:
+		color 0.15s,
+		transform 0.15s;
+}
+.star-btn:hover {
+	color: var(--warn);
+	background: var(--bg3);
+}
+.star-btn.on {
+	color: var(--warn);
+}
+.star-btn.on:hover {
+	transform: scale(1.1);
 }
 .action-card {
 	flex: 1;
@@ -1212,9 +1315,13 @@ main {
 	background: var(--bg2);
 	border: 1px solid var(--border);
 	border-radius: var(--r-m);
-	padding: 14px 12px;
+	/* 横排紧凑：图标与文字同行，高度 ~46px（第二评审建议 ≥44px 保证点击热区） */
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px;
 	cursor: pointer;
-	text-align: center;
+	text-align: left;
 	box-shadow: var(--shadow);
 	transition:
 		border-color 0.15s,
@@ -1229,8 +1336,13 @@ main {
 	box-shadow: var(--shadow-float);
 }
 .action-card .card-icon {
-	font-size: 22px;
-	margin-bottom: 6px;
+	font-size: 16px;
+	margin: 0;
+	flex: 0 0 auto;
+}
+.action-card .card-text {
+	flex: 1;
+	min-width: 0;
 }
 /* 标签可能是完整动作（「在终端启动 Claude Code」），过长时省略，完整内容看 title */
 .action-card .card-label {

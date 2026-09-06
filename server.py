@@ -771,14 +771,20 @@ def build_tree(path, blacklist, old_idx, stats, depth=0):
         full = os.path.join(path, e)
         if os.path.isdir(full):
             subdirs.append(e)
-        else:
+        elif os.path.isfile(full):
             files.append(e)
+        # 其余（悬空 junction / 云占位等 reparse 项，stat 直接失败）：
+        # 既进不了子目录也不是真文件，不计入 fileCount——否则文件夹会
+        # 显示一个"幽灵文件"数（实测 od-store 的悬空哈希目录 +1）
     node["fileCount"] = len(files)
     # 排除/手动标记在目录分支也要回填，否则重扫后标记丢失（排除的又显示出来）
     node["marked"] = old.get("marked", "auto") if old else "auto"
     if too_deep:
         # 深度到顶：不再向下递归，仅统计本层（防止超深目录击穿递归栈）
         stats["truncated"] += 1
+        node["dirCount"] = sum(
+            1 for d in subdirs if not is_blacklisted(d, blacklist)
+        )
         return node
     for d in sorted(subdirs, key=str.lower):
         if is_blacklisted(d, blacklist):
@@ -793,6 +799,8 @@ def build_tree(path, blacklist, old_idx, stats, depth=0):
         except OSError:
             continue  # 扫描瞬间目录被移动/删除，跳过即可
     node["children"].sort(key=lambda n: (n["type"] != "project", n["name"].lower()))
+    # 目录徽章用：可见子文件夹数（与文件数并列展示，消除"+2 文件"歧义）
+    node["dirCount"] = len(node["children"])
     return node
 
 
@@ -1273,15 +1281,20 @@ def open_path(path, mode, editor=None, agent=None):
         return {"ok": False, "error": "路径包含非法字符"}
     cfg = load_config()
     if mode == "explorer":
-        # 2 秒内同一目录只开一次，避免重复点击弹出一堆窗口
-        key = os.path.normcase(os.path.normpath(path))
+        # 同一路径 10 秒内只开一次：explorer 窗口有延迟，连点会堆一堆窗口占内存
+        key = "explorer:" + os.path.normcase(os.path.normpath(path))
         now = time.time()
-        if now - _last_explorer.get(key, 0) < 2.0:
+        if now - _last_open.get(key, 0) < 10.0:
             return {"ok": True, "dedup": True}
-        _last_explorer[key] = now
-        # 用 argv 直接传参，不走 cmd 解释，路径里的 & | ^ 等字符不再是注入面
-        subprocess.Popen(["explorer", "/select," + path])
+        _last_open[key] = now
+        # 直接打开目录本身的窗口（此前用 /select, 会打开父目录并选中，用户感知为"没弹窗"）
+        subprocess.Popen(["explorer", path])
     elif mode == "terminal":
+        key = "terminal:" + os.path.normcase(os.path.normpath(path))
+        now = time.time()
+        if now - _last_open.get(key, 0) < 10.0:
+            return {"ok": True, "dedup": True}
+        _last_open[key] = now
         subprocess.Popen(
             [
                 "powershell",
@@ -1352,7 +1365,7 @@ def open_path(path, mode, editor=None, agent=None):
     return {"ok": True}
 
 
-_last_explorer = {}
+_last_open = {}  # {mode:path → 上次打开时间戳}：资源管理器/终端 10 秒内同路径去重
 
 
 # ---------------------------------------------------------------- 使用记录

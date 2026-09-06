@@ -56,13 +56,15 @@ Note: the interface and the generated summaries are in Chinese.
 
 ## 界面预览
 
-![星图主界面](web/screenshot-main.png)
+![星图 StarChart](web/cover.png)
 
-左侧项目树（AI 一句话介绍 + 技术栈徽章 + Git 状态），右侧详情面板（一键打开编辑器 / 终端 / AI Agent，识别启动入口）。
+![项目树](web/screenshot-main.png)
 
-![拼音搜索](web/screenshot-search.png)
+扫描工作区后自动生成项目树：AI 一句话介绍 + 技术栈徽章 + Git 状态；选中项目一键进编辑器 / 终端 / AI Agent，或直接运行。
 
-搜索框直接打拼音首字母：输入 `zhjy` 秒中「智慧教育课程自动观看工具」。
+![GitHub 趋势榜](web/screenshot-search.png)
+
+内置 GitHub 趋势榜，AI 为每个趋势项目生成中文导读。搜索支持拼音首字母：打 `zhjy` 秒中「智慧教育课程自动观看工具」。
 
 ## 功能特性
 
