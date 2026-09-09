@@ -56,7 +56,7 @@ Note: the interface and the generated summaries are in Chinese.
 
 ## 界面预览
 
-![星图 StarChart](web/cover.png)
+![星图 StarChart](web/cover.jpg)
 
 ![项目树](web/screenshot-main.png)
 
@@ -271,13 +271,19 @@ starchart\
 ## 安全说明
 
 - 服务只监听 `127.0.0.1`，不对外暴露
-- 所有 POST 接口校验 `Origin`，拒绝跨站请求
+- 所有请求校验 `Host` 头（只接受本机地址，阻断 DNS rebinding 攻击）；
+  POST 接口额外校验 `Origin`，拒绝跨站请求
+- 静态文件服务三重防穿越：拒绝 `..` 与绝对路径 + `realpath` 前缀校验
 - 启动入口参数走白名单，防止命令注入
 - 编辑器 / Agent 只能启动本机已探测到的程序，不接受请求传入的任意路径
-- API Key 用 Windows DPAPI 加密后保存在 `config.json`（仅本机当前用户可解密），
-  导出的备份包内含的也是密文，不出现明文 Key
-- 注意：备份包跨机器 / 跨用户恢复后，API Key 已无法解密，需在设置中重新填写；
+- API Key / GitHub Token 用 Windows DPAPI 加密后保存在 `config.json`
+  （仅本机当前用户可解密），界面回显永远是掩码；导出的备份包内含的也是密文，
+  不出现明文 Key
+- 注意：备份包跨机器 / 跨用户恢复后，密文已无法解密，需在设置中重新填写；
   如需与他人共享数据，仍建议先清空 Key 或删除备份包
+- 扫描根目录之外的路径一律拒绝访问（含符号链接 / junction 逃逸防护）
+- 模型配置至少保留一条；`roots` / `blacklist` / 端口有类型与范围校验
+- 已知边界：非 Windows 平台 DPAPI 不可用，凭据回落明文存储（见"平台与环境要求"）
 
 ## 许可证
 
