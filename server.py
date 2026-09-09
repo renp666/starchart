@@ -330,6 +330,13 @@ def load_config():
                     _config["editor"] = {"name": "VS Code", "cmd": 'code "{path}"'}
                 if _config.get("theme") not in ("dark", "light", "auto"):
                     _config["theme"] = "auto"
+                # ghToken 历史遗留明文：就地升级为 DPAPI 密文（一次性迁移）
+                gt = (_config.get("ghToken") or "").strip()
+                if gt and not gt.startswith(DPAPI_PREFIX) and gt != MASK:
+                    enc = encrypt_api_key(gt)
+                    if enc:
+                        _config["ghToken"] = enc
+                        log("ghToken 已升级为 DPAPI 加密存储")
             # 模型配置：全新安装与旧三轨统一在这里初始化/迁移
             # （entries + activeId，选中即生效），并同步 config.api 镜像
             _migrate_model_config()
@@ -573,6 +580,20 @@ def detect_launchers(path, entries):
         real = lower.get(fname)
         if real:
             launchers.append({"kind": "bat", "file": real, "label": real})
+    # 其他常见命名的批处理入口（dev.bat / dev.cmd / build.bat…）：根目录任意
+    # .bat/.cmd 都算候选，避免固定名单漏掉 dev.bat 这类实际启动脚本
+    if len(launchers) < 6:
+        for e in entries:
+            el = e.lower()
+            if el.endswith((".bat", ".cmd")) and el not in (
+                "run.bat",
+                "start.bat",
+                "run.cmd",
+                "start.cmd",
+            ):
+                launchers.append({"kind": "bat", "file": e, "label": e})
+                if len(launchers) >= 6:
+                    break
     if any(
         k in lower
         for k in ("docker-compose.yml", "docker-compose.yaml", "compose.yaml")
@@ -919,7 +940,8 @@ def refresh_git_status(tree, enabled=True):
     return sum(1 for n in targets if n.get("git"))
 
 
-_scanning = False
+_scanning = False        # 兼容旧状态字段（/api/status 回传用）
+_scan_lock = threading.Lock()  # 扫描互斥：非阻塞 acquire 原子占位
 
 
 def _index_fresh(max_age_seconds=3600):
@@ -950,15 +972,14 @@ def _safe_auto_scan():
 
 def run_scan():
     """扫描入口：同一时刻只允许一次扫描，避免并发扫描与介绍生成产生竞态。"""
-    global _scanning
-    if _scanning:
+    # 原子占位：check-then-set 在并发请求下会双开扫描，用非阻塞锁一次完成
+    if not _scan_lock.acquire(blocking=False):
         return {"ok": False, "error": "已有扫描正在进行，请等待完成"}
-    _scanning = True
     log("开始扫描")
     try:
         return _run_scan()
     finally:
-        _scanning = False
+        _scan_lock.release()
 
 
 def _run_scan():
@@ -1252,14 +1273,16 @@ def batch_status(tid):
 
 def path_allowed(path):
     cfg = load_config()
-    norm = os.path.normpath(path)
+    # realpath 解析 junction/符号链接：扫描根内的链接不得逃逸出根目录
+    norm = os.path.realpath(os.path.normpath(path))
     if not os.path.isdir(norm):
         return None
-    for root in cfg["roots"]:
+    real_roots = [os.path.realpath(os.path.normpath(r)) for r in cfg["roots"]]
+    for root, real_root in zip(cfg["roots"], real_roots):
         try:
             if (
-                os.path.commonpath([norm.lower(), os.path.normpath(root).lower()])
-                == os.path.normpath(root).lower()
+                os.path.commonpath([norm.lower(), real_root.lower()])
+                == real_root.lower()
             ):
                 return norm
         except ValueError:
@@ -1900,6 +1923,10 @@ def _gh_get(url, accept="application/vnd.github+json", timeout=TREND_TIMEOUT):
     """带 UA 与可选 Token 的 GET。直连失败后按设置里的镜像前缀重试一次；全失败返回 None。"""
     headers = {"User-Agent": GH_UA, "Accept": accept}
     token = (load_config().get("ghToken") or "").strip()
+    if token.startswith(DPAPI_PREFIX):
+        # 与 apiKey 同标准：落盘的是 DPAPI 密文，使用时解密
+        dec = _dpapi_decrypt(token[len(DPAPI_PREFIX) :])
+        token = dec or ""
     if token:
         headers["Authorization"] = "Bearer " + token
     kind = "other"
@@ -2567,7 +2594,11 @@ def read_log_tail(max_lines=200):
 
 
 def pid_alive(pid):
-    """Windows 下检测进程是否仍存活（STILL_ACTIVE）。检测失败时保守视为存活。"""
+    """Windows 下检测进程是否仍存活（STILL_ACTIVE）。
+
+    检测失败（权限/进程已退出）返回 False：宁可丢一条运行记录，也不要把
+    PID 复用后的无关进程当成"还在运行"（/api/stop 会 taskkill 它的进程树）。
+    """
     try:
         import ctypes
 
@@ -2580,7 +2611,7 @@ def pid_alive(pid):
         k.CloseHandle(h)
         return bool(ok) and code.value == 259  # STILL_ACTIVE
     except Exception:
-        return True
+        return False
 
 
 def prune_running():
@@ -2700,17 +2731,20 @@ class Handler(BaseHTTPRequestHandler):
             )
         if path == "/api/running":
             prune_running()
-            items = [
-                {"path": k, "pid": e["pid"], "cmd": e["cmd"]}
-                for k, v in RUNNING.items()
-                for e in v
-            ]
+            with LOCK:  # 与 /api/launch 的持锁写入互斥，避免边迭代边改
+                items = [
+                    {"path": k, "pid": e["pid"], "cmd": e["cmd"]}
+                    for k, entries in RUNNING.items()
+                    for e in entries
+                ]
             return self._json({"ok": True, "running": items})
         if path == "/api/editors":
             editors, agents = detect_all()
             return self._json({"ok": True, "editors": editors, "agents": agents})
         if path == "/api/status":
-            return self._json({"ok": True, "scanning": _scanning})
+            return self._json(
+                {"ok": True, "scanning": _scan_lock.locked()}
+            )
         if path == "/api/log":
             return self._json({"ok": True, "log": read_log_tail()})
         if path == "/api/trending":
@@ -2935,6 +2969,7 @@ class Handler(BaseHTTPRequestHandler):
                         subprocess.run(
                             ["taskkill", "/PID", str(entry["pid"]), "/T", "/F"],
                             capture_output=True,
+                            timeout=10,  # 与 git_status 的超时标准一致，防挂起
                         )
                         killed.append(entry["pid"])
                     except OSError:
@@ -3015,6 +3050,23 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/config":
                 body = self._body_json().get("config", {})
                 cfg = load_config()
+                # 字段类型校验：roots/blacklist 必须是列表，端口必须是合理数字
+                # （此前裸赋值，传字符串会在扫描循环里逐字符迭代）
+                if "roots" in body and (
+                    not isinstance(body["roots"], list)
+                    or not all(isinstance(r, str) for r in body["roots"])
+                ):
+                    return self._json({"ok": False, "error": "roots 格式不正确"})
+                if "blacklist" in body and not isinstance(body["blacklist"], list):
+                    return self._json({"ok": False, "error": "blacklist 格式不正确"})
+                if "port" in body:
+                    try:
+                        p = int(body["port"])
+                        if not (1 <= p <= 65535):
+                            raise ValueError
+                        body["port"] = p
+                    except (TypeError, ValueError):
+                        return self._json({"ok": False, "error": "端口必须是 1-65535 的数字"})
                 with LOCK:
                     for key in (
                         "port",
@@ -3029,6 +3081,13 @@ class Handler(BaseHTTPRequestHandler):
                     ):
                         if key in body:
                             cfg[key] = body[key]
+                    # ghToken 与 apiKey 同标准：明文落盘前先 DPAPI 加密
+                    # （掩码回传的值不覆盖真值；空串=清除）
+                    gt = (cfg.get("ghToken") or "").strip()
+                    if gt and gt != MASK and not gt.startswith(DPAPI_PREFIX):
+                        cfg["ghToken"] = encrypt_api_key(gt)
+                    elif gt == "":
+                        cfg["ghToken"] = ""
                     if body.get("theme") in ("dark", "light", "auto"):
                         cfg["theme"] = body["theme"]
                     # ---- 模型配置（单轨）：entries + activeId，选中即生效 ----
@@ -3058,6 +3117,9 @@ class Handler(BaseHTTPRequestHandler):
                                 }
                             )
                         if not entries:
+                            # 早退前先落盘：上面 roots/editor 等改动已写入内存 cfg，
+                            # 不落盘会造成内存与磁盘配置分叉
+                            save_config()
                             return self._json(
                                 {"ok": False, "error": "至少保留一条模型配置"}
                             )

@@ -105,25 +105,33 @@ async function api(path, body, raw) {
 					: { "Content-Type": "application/json" },
 			}
 		: {};
-	let resp;
+	// 全局 60s 超时：后端挂起时请求中断进 catch，按钮不再永久停在加载态
+	// （LLM 生成本身可能 ~45s，故不能设太短）
+	const ctrl = new AbortController();
+	opt.signal = ctrl.signal;
+	const timer = setTimeout(() => ctrl.abort(), 60000);
 	try {
-		resp = await fetch(path, opt);
-	} catch (e) {
-		// 连接层失败（服务没起来 / 连接被重置 / 连接断开）—— 只可能是服务或传输问题，
-		// 统一走"不可达"处理，不给用户一堆看不懂的底层异常。
-		if (isNetError(e)) {
-			console.error("[star] api 网络失败:", path, e);
-			probeAlive().then((alive) => {
-				if (!alive) showNetDown();
-			});
-			const err = new Error(
-				"请求失败：本地服务暂时没有响应，请点右下角重试或查看服务是否运行",
-			);
-			err.isNetwork = true;
-			throw err;
+		let resp;
+		try {
+			resp = await fetch(path, opt);
+		} catch (e) {
+			// 连接层失败（服务没起来 / 连接被重置 / 连接断开 / 超时中断）——
+			// 统一走"不可达"处理，不给用户一堆看不懂的底层异常。
+			if (isNetError(e) || e?.name === "AbortError") {
+				console.error("[star] api 网络失败:", path, e);
+				probeAlive().then((alive) => {
+					if (!alive) showNetDown();
+				});
+				const err = new Error(
+					e?.name === "AbortError"
+						? "请求超时（60 秒无响应），请确认服务是否正常运行"
+						: "请求失败：本地服务暂时没有响应，请点右下角重试或查看服务是否运行",
+				);
+				err.isNetwork = true;
+				throw err;
+			}
+			throw e;
 		}
-		throw e;
-	}
 	// 星图接口都应返回 JSON；万一拿到 HTML/空页（如残留旧标签页、反向代理吞掉了接口、
 	// 或服务正被其他响应顶替），继续 JSON.parse 只会抛 $"Unexpected token '<'"——
 	// 这类看不懂的错归一化成明确的"服务异常/请重连"提示。
@@ -144,6 +152,9 @@ async function api(path, body, raw) {
 	}
 	if (j && j.ok === false && j.error) throw new Error(j.error);
 	return j;
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 function toast(msg, isError) {
@@ -194,7 +205,9 @@ function getExpanded() {
 	}
 }
 function saveExpanded(set) {
-	localStorage.setItem("starchart-expanded", JSON.stringify([...set]));
+	try {
+		localStorage.setItem("starchart-expanded", JSON.stringify([...set]));
+	} catch {} // 隐私模式/配额满：静默降级，展开态不持久化而已
 }
 const expanded = getExpanded();
 
@@ -210,7 +223,12 @@ function getCollapsedRoots() {
 	}
 }
 function saveCollapsedRoots(set) {
-	localStorage.setItem("starchart-collapsed-roots", JSON.stringify([...set]));
+	try {
+		localStorage.setItem(
+			"starchart-collapsed-roots",
+			JSON.stringify([...set]),
+		);
+	} catch {}
 }
 const collapsedRoots = getCollapsedRoots();
 
@@ -823,6 +841,18 @@ function renderDetail(node) {
 			`<span class="intro-text">${esc(
 				node.intro || "暂无介绍 —— 点击编辑，或用顶栏「生成介绍」",
 			)}</span><span class="intro-edit-hint" aria-hidden="true">✎</span>`;
+		box.tabIndex = 0;
+		box.setAttribute("role", "button");
+		box.setAttribute(
+			"aria-label",
+			"项目介绍：" + (node.intro || "暂无，点击编辑"),
+		);
+		box.addEventListener("keydown", (ev) => {
+			if (ev.key === "Enter" || ev.key === " ") {
+				ev.preventDefault();
+				editIntro(node);
+			}
+		});
 		box.addEventListener("click", () => editIntro(node));
 		d.appendChild(box);
 	}
@@ -834,7 +864,8 @@ function renderDetail(node) {
 
 	// 卡 1: 启动
 	const launchers = node.launchers || [];
-	const launchCard = document.createElement("div");
+	const launchCard = document.createElement("button");
+	launchCard.type = "button";
 	launchCard.className = "action-card" + (launchers.length ? "" : " disabled");
 	if (launchers.length === 1) {
 		const l = launchers[0];
@@ -897,7 +928,8 @@ function renderDetail(node) {
 	const missing = specificHints
 		.filter((h) => !detectedIds.has(h))
 		.map((h) => TOOL_NAMES[h] || h);
-	const openCard = document.createElement("div");
+	const openCard = document.createElement("button");
+	openCard.type = "button";
 	openCard.className = "action-card" + (ways.length ? "" : " disabled");
 	let cardSub, cardLabel;
 	// 单项：标签直接写动作（「用 Trae 打开」），副标题写来源；多项：标签写分类
@@ -1007,6 +1039,7 @@ function renderDetail(node) {
 		fsBox.appendChild(list);
 
 		let ftimer = null;
+		let fseq = 0; // 请求序号：慢的旧响应回来时丢弃，防止覆盖新结果
 		input.addEventListener("input", () => {
 			clearTimeout(ftimer);
 			const q = input.value.trim();
@@ -1016,6 +1049,7 @@ function renderDetail(node) {
 				return;
 			}
 			ftimer = setTimeout(async () => {
+				const seq = ++fseq;
 				// pi-lens-ignore: no-inner-html-js
 				list.innerHTML = `<span class="hint-line">搜索中…</span>`;
 				try {
@@ -1023,6 +1057,7 @@ function renderDetail(node) {
 						`/api/files?path=${encodeURIComponent(node.path)}` +
 							`&q=${encodeURIComponent(q)}`,
 					);
+					if (seq !== fseq) return; // 已有更新的搜索，丢弃过期响应
 					// pi-lens-ignore: no-inner-html-js
 					list.innerHTML = "";
 					if (!r.files.length) {
@@ -1299,7 +1334,9 @@ async function doLaunch(node, launcher) {
 	} catch (e) {
 		toast(e.message, true);
 	}
-	// 立即刷新运行状态 + 启动轮询
+	// 竞态防护：等待期间用户可能已切换项目——只更新仍属于该项目的详情面板，
+	// 否则旧项目的运行状态/轮询会渲染到新项目详情里
+	if (selectedPath !== node.path) return;
 	const runDiv = $("#run-state-area");
 	if (runDiv) {
 		await refreshLaunch(node, runDiv);
@@ -1895,7 +1932,11 @@ async function doGenerate() {
 			text.textContent = `${finished}/${total}`;
 			if (finished !== shown) {
 				shown = finished;
-				await reloadTree(); // 有进展就刷新，让介绍一条条出现
+				// 节流：每完成 5 项（或最后 1 项）才整树刷新一次——
+				// 100 个项目 = 100 次全量重渲会明显卡顿
+				if (finished % 5 === 0 || finished >= total) {
+					await reloadTree(); // 让介绍一批批出现
+				}
 			}
 			if (!s.running) break;
 			if (stopFlag)
@@ -2033,7 +2074,7 @@ function openSettings() {
       </select>
     </div>
     <div class="field"><label>服务端口（修改后需重启）</label>
-      <input type="text" id="set-port" value="${config.port || 6173}" inputmode="numeric" title="本地服务监听端口，默认 6173；改后需重启星图生效，且浏览器标签需用新端口打开">
+      <input type="text" id="set-port" value="${esc(config.port || 6173)}" inputmode="numeric" title="本地服务监听端口，默认 6173；改后需重启星图生效，且浏览器标签需用新端口打开">
     </div>
     <div class="field"><label>常用备份目录</label>
       <input type="text" id="set-backupdir" value="${esc(config.backupDir || "")}" placeholder="U 盘或网盘同步文件夹" title="备份导出的默认落盘目录；仅作为默认路径，可留空，每次导出时也能改">
@@ -2942,7 +2983,7 @@ function trendCardHTML(it) {
          title="${esc(it.url)}">${esc(it.owner)} / <b>${esc(it.name)}</b></a>
     </div>
     <div class="tc-meta">
-      ${it.lang ? `<span class="tc-lang"><i style="background:${esc(it.langColor || "#8b949e")}"></i>${esc(it.lang)}</span>` : ""}
+      ${it.lang ? `<span class="tc-lang"><i style="background:${/^[0-9a-f]{3,8}$/i.test(it.langColor || "") ? esc(it.langColor) : "#8b949e"}"></i>${esc(it.lang)}</span>` : ""}
       <span class="tc-star">★ ${fmtStar(it.stars)}</span>
       <span class="tc-today">${sinceLabel} +${fmtStar(it.today)}</span>
     </div>
