@@ -241,7 +241,7 @@ function renderRootHeader(c, collapsed) {
 	// pi-lens-ignore: no-inner-html-js
 	hd.innerHTML =
 		`<span class="twisty">${collapsed ? "▶" : "▼"}</span>` +
-		`<span class="icon">🗂️</span>` +
+		`<span class="icon">${IC_ROOT}</span>` +
 		`<span class="root-name">${esc(c.name)}</span>` +
 		`<span class="root-path">${esc(c.path)}</span>`;
 	hd.addEventListener("click", (e) => {
@@ -333,11 +333,27 @@ function computeSearchAutoExpand(tree, q) {
 	return set;
 }
 
+// 单色线性图标：与顶栏 act-ic 同一描边语言（innerHTML 场景用）
+const ic = (inner) =>
+	`<svg class="node-ic" viewBox="0 0 24 24" aria-hidden="true"><g stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round">${inner}</g></svg>`;
+const IC_PROJ = ic(
+	'<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+);
+const IC_DIR = ic(
+	'<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+);
+const IC_DIR_OPEN = ic(
+	'<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
+);
+const IC_ROOT = ic(
+	'<polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5" rx="1"/><line x1="10" y1="12" x2="14" y2="12"/>',
+);
+
 function iconFor(node) {
-	if (node.type === "project") return "🛠";
+	if (node.type === "project") return IC_PROJ;
 	return isExpanded(node.path) && node.children && node.children.length
-		? "📂"
-		: "📁";
+		? IC_DIR_OPEN
+		: IC_DIR;
 }
 
 function renderNode(node, q, _isRoot, depth = 1) {
@@ -520,7 +536,7 @@ function renderFrequent() {
 		return b;
 	};
 	bar.appendChild(mk("★ 使用频率", "usage"));
-	bar.appendChild(mk("🕒 最近修改", "mtime"));
+	bar.appendChild(mk("最近修改", "mtime"));
 	treeEl.appendChild(bar);
 
 	const usage = data.usage || {};
@@ -569,7 +585,7 @@ function renderFrequent() {
 		// pi-lens-ignore: no-inner-html-js
 		row.innerHTML =
 			`<span class="twisty"></span>` +
-			`<span class="icon">🛠</span>` +
+			`<span class="icon">${IC_PROJ}</span>` +
 			`<span class="node-main"><span class="name">${esc(n.name)}</span></span>` +
 			(n.intro ? `<span class="intro-line">${esc(n.intro)}</span>` : "") +
 			mark;
@@ -735,7 +751,7 @@ function renderDetail(node) {
 	head.className = "detail-head";
 	const h = document.createElement("h2");
 	// pi-lens-ignore: no-inner-html-js
-	h.innerHTML = `${node.type === "project" ? "🛠" : "📁"} ${highlight(node.name, searchQuery.trim().toLowerCase())}`;
+	h.innerHTML = `${node.type === "project" ? IC_PROJ : IC_DIR} ${highlight(node.name, searchQuery.trim().toLowerCase())}`;
 	head.appendChild(h);
 	// 收藏：★ 常用视图置顶 + 树行星标，零代价切换，放标题行（第二评审一致同意）
 	const starBtn = document.createElement("button");
@@ -824,7 +840,7 @@ function renderDetail(node) {
 		editBtn.textContent =
 			(node.tags && node.tags.length) || node.note
 				? "✎ 编辑标签 / 备注"
-				: "🏷 添加标签 / 备注";
+				: "✎ 添加标签 / 备注";
 		editBtn.addEventListener("click", () => editMeta(node));
 		tagsWrap.appendChild(editBtn);
 		d.appendChild(tagsWrap);
@@ -912,7 +928,7 @@ function renderDetail(node) {
 	);
 	agList.forEach((ag) =>
 		ways.push({
-			icon: "🤖",
+			icon: "",
 			mode: "agent",
 			editor: null,
 			agent: ag,
@@ -978,7 +994,7 @@ function renderDetail(node) {
 		b.addEventListener("click", fn);
 		quick.appendChild(b);
 	};
-	qa("📂 资源管理器", "在资源管理器中打开项目目录（10 秒内同目录不重复打开）", () => {
+	qa("资源管理器", "在资源管理器中打开项目目录（10 秒内同目录不重复打开）", () => {
 		const now = Date.now();
 		if (now - (lastExplorer[node.path] || 0) < 10000) {
 			toast("该目录的窗口刚已打开（10 秒内不重复打开）");
@@ -1001,11 +1017,11 @@ function renderDetail(node) {
 	mgBtn.className = "mg-btn";
 	if (node.type === "project") {
 		mgBtn.textContent = "⊘ 排除";
-		mgBtn.title = "排除此项目（不再显示，可撤销；已排除项目见顶栏 🗑）";
+		mgBtn.title = "排除此项目（不再显示，可撤销；已排除项目见顶栏）";
 		mgBtn.setAttribute("aria-label", "排除此项目");
 		mgBtn.addEventListener("click", () => confirmExclude(node));
 	} else {
-		mgBtn.textContent = "📌 标为项目";
+		mgBtn.textContent = "⊕ 标为项目";
 		mgBtn.title = "手动标记为项目（依据标志物自动识别之外）";
 		mgBtn.setAttribute("aria-label", "标为项目");
 		mgBtn.addEventListener("click", () => doMark(node, "manual"));
@@ -1106,7 +1122,7 @@ function renderDetail(node) {
 		d.appendChild(sectionTitle("使用说明"));
 		const docBtn = document.createElement("button");
 		// 默认展开（用户诉求）；doc-box 有 max-height 360px 内滚动，长 README 不撑爆面板
-		docBtn.textContent = "📖 收起说明";
+		docBtn.textContent = "▾ 收起说明";
 		const docBox = document.createElement("div");
 		docBox.className = "doc-box";
 		const loadDoc = async () => {
@@ -1137,7 +1153,7 @@ function renderDetail(node) {
 		docBtn.addEventListener("click", () => {
 			const open = !docBox.classList.contains("hidden");
 			docBox.classList.toggle("hidden", open);
-			docBtn.textContent = open ? "📖 查看使用说明" : "📖 收起说明";
+			docBtn.textContent = open ? "▸ 查看使用说明" : "▾ 收起说明";
 		});
 		d.appendChild(docBtn);
 		d.appendChild(docBox);
@@ -1172,7 +1188,7 @@ function showOpenMenu(anchor, node, ways, missing) {
 		items.push({ header: "项目配置匹配" });
 		hint.forEach((w) =>
 			items.push({
-				label: `${w.icon} ${w.action}`,
+				label: `${w.icon ? w.icon + " " : ""}${w.action}`,
 				fn: () => openPath(node.path, w.mode, w.editor, w.agent),
 			}),
 		);
@@ -1181,7 +1197,7 @@ function showOpenMenu(anchor, node, ways, missing) {
 		items.push({ header: "本机已装" });
 		rest.forEach((w) =>
 			items.push({
-				label: `${w.icon} ${w.action}`,
+				label: `${w.icon ? w.icon + " " : ""}${w.action}`,
 				fn: () => openPath(node.path, w.mode, w.editor, w.agent),
 			}),
 		);
@@ -1271,7 +1287,7 @@ function showRowMenu(e, node) {
 
 	// 常用三件置顶突出
 	add(
-		"📂 资源管理器",
+		"资源管理器",
 		() => {
 			const now = Date.now();
 			if (now - (lastExplorer[node.path] || 0) < 10000) {
@@ -1296,18 +1312,18 @@ function showRowMenu(e, node) {
 	add("▶ 终端", () => openPath(node.path, "terminal"), true);
 
 	sep();
-	add("✏ 编辑介绍", () => editIntro(node));
+	add("✎ 编辑介绍", () => editIntro(node));
 	add(node.starred ? "☆ 取消收藏" : "★ 收藏", () =>
 		doStar(node, !node.starred),
 	);
-	add("🏷 标签 / 备注", () => editMeta(node));
+	add("✎ 标签 / 备注", () => editMeta(node));
 	if (node.type === "project") {
 		add("✖ 排除此项目", () => confirmExclude(node));
 	} else {
-		add("📌 标为项目", () => doMark(node, "manual"));
+		add("⊕ 标为项目", () => doMark(node, "manual"));
 	}
 	sep();
-	add("🗑 已排除的项目…", openExcluded);
+	add("已排除的项目…", openExcluded);
 
 	document.body.appendChild(menu);
 	const pad = 10;
@@ -1671,7 +1687,7 @@ async function doStar(node, starred) {
 
 function editMeta(node) {
 	const m = openModal(`
-    <h3>🏷 标签与备注</h3>
+    <h3>标签与备注</h3>
     <div class="field"><label>标签（逗号分隔，最多 10 个）</label>
       <input type="text" id="meta-tags" value="${esc((node.tags || []).join(", "))}"
              placeholder="如：工作, 前端, 待重构">
@@ -2055,7 +2071,7 @@ function openSettings() {
 	const preRoots = [...(config.roots || [])];
 	const m = openModal(
 		`
-    <h3>⚙ 设置</h3>
+    <h3>设置</h3>
     <div class="set-wrap">
     <nav class="set-nav" id="set-nav">
       <button data-sec="sec-general" class="on">通用</button>
@@ -2084,7 +2100,7 @@ function openSettings() {
     <h4>扫描配置</h4>
     <div class="field"><label>扫描根目录</label>
       <div class="taglist" id="set-roots-tags"></div>
-      <button id="set-roots-pick" type="button" style="flex:0 0 auto">📁 选择目录…</button>
+      <button id="set-roots-pick" type="button" style="flex:0 0 auto">选择目录…</button>
       <div class="hint">可添加多个根目录，点目录上的 ✕ 移除。
         选择窗口由星图服务在你的桌面上弹出——浏览器出于安全不提供本地路径，无法在网页里选。</div>
     </div>
@@ -2104,7 +2120,7 @@ function openSettings() {
       <textarea id="set-blacklist" class="blacklist-area" rows="5" spellcheck="false"
         placeholder="# 每行一条，忽略匹配到的目录名，支持 * 通配符&#10;node_modules&#10;__pycache__&#10;dist*"></textarea>
       <div class="row blacklist-ops">
-        <button id="set-bl-pick" type="button" style="flex:0 0 auto">📁 选择目录加入…</button>
+        <button id="set-bl-pick" type="button" style="flex:0 0 auto">选择目录加入…</button>
         <span class="hint" style="flex:1;align-self:center">每行一条目录名/通配符；# 开头为注释；不区分大小写。修改后需「重新扫描」生效。</span>
       </div>
     </div>
@@ -2160,7 +2176,7 @@ function openSettings() {
     </div>
     <div class="hint">仅当自动检测不到本机已装编辑器时兜底；{path} 会被替换为项目路径。</div>
     <details class="advanced" id="set-log-dd">
-      <summary>📜 服务日志（跳转 / 启动 / 停止 / 报错）</summary>
+      <summary>服务日志（跳转 / 启动 / 停止 / 报错）</summary>
       <div class="field">
         <pre id="set-log" class="log-view">加载中…</pre>
         <button id="set-log-refresh" type="button">刷新</button>
@@ -2370,14 +2386,14 @@ function openSettings() {
 				eye.type = "button";
 				eye.className = "icon-btn";
 				eye.style.flex = "0 0 auto";
-				eye.textContent = "👁";
+				eye.textContent = "显";
 				eye.title = "显示 / 隐藏 API Key";
 				let revealed = "";
 				eye.addEventListener("click", async () => {
 					if (kin.type === "text") {
 						if (revealed && kin.value === revealed) kin.value = MASK_JS;
 						kin.type = "password";
-						eye.textContent = "👁";
+						eye.textContent = "显";
 						eye.title = "显示 / 隐藏 API Key";
 						revealed = "";
 						return;
@@ -2400,7 +2416,7 @@ function openSettings() {
 						}
 					}
 					kin.type = "text";
-					eye.textContent = "🙈";
+					eye.textContent = "隐";
 					eye.title = "隐藏 API Key";
 				});
 				kin.addEventListener("input", () => {
@@ -2745,7 +2761,7 @@ async function restoreExcluded(path, btn) {
 function openExcluded() {
 	const m = openModal(
 		`
-    <h3>🗑 已排除的项目</h3>
+    <h3>已排除的项目</h3>
     <div class="hint">被排除的项目不会显示在树里，但数据仍保留（此即"回收站"）。点「恢复」重新纳入；"重新扫描后完全生效"指它重新被识别为项目。</div>
     <div class="row" style="margin:10px 0">
       <input type="text" id="ex-search" placeholder="按名称 / 路径过滤">
@@ -2903,7 +2919,7 @@ function renderAIBlock(text) {
 			const [k, ...rest] = ln.split("：");
 			html += `<div class='ai-kv'><span class='ai-k'>${esc(k)}</span>${escHtml(rest.join("："))}</div>`;
 		} else if (ln.startsWith("推荐：")) {
-			html += `<div class='ai-rec'>⭐ ${escHtml(ln.slice(3))}</div>`;
+			html += `<div class='ai-rec'>★ ${escHtml(ln.slice(3))}</div>`;
 		} else if (ln.startsWith("本期风向：")) {
 			html += `<div class='ai-wind'>${escHtml(ln.slice(5))}</div>`;
 		} else {
@@ -2988,10 +3004,10 @@ function trendCardHTML(it) {
       <span class="tc-today">${sinceLabel} +${fmtStar(it.today)}</span>
     </div>
     <div class="tc-desc">${esc(it.desc || "（无描述）")}</div>
-    ${intro ? `<div class="tc-intro">🇨🇳 ${esc(intro)}</div>` : ""}
+    ${intro ? `<div class="tc-intro">${esc(intro)}</div>` : ""}
     <div class="tc-acts">
-      <button data-act="intro" title="用所配 LLM 生成该仓库的中文一句话介绍">${intro ? "🔄 重生成" : "✨ 中文介绍"}</button>
-      <button data-act="guide" title="生成 / 打开该仓库的中文项目导读">${hasGuide ? "📖 看导读" : "📖 中文导读"}</button>
+      <button data-act="intro" title="用所配 LLM 生成该仓库的中文一句话介绍">${intro ? "⟳ 重生成" : "中文介绍"}</button>
+      <button data-act="guide" title="生成 / 打开该仓库的中文项目导读">${hasGuide ? "看导读" : "中文导读"}</button>
       <button data-act="copy" title="复制仓库地址">⧉ 地址</button>
     </div>
   </div>`;
@@ -3055,7 +3071,7 @@ async function trendOneIntro(name, desc, btn) {
 		toast(e.message, true);
 		if (btn) {
 			btn.disabled = false;
-			btn.textContent = "✨ 中文介绍";
+			btn.textContent = "中文介绍";
 		}
 	}
 }
@@ -3077,7 +3093,7 @@ async function trendOneGuide(name, desc, btn) {
 		toast(e.message, true);
 		if (btn) {
 			btn.disabled = false;
-			btn.textContent = "📖 中文导读";
+			btn.textContent = "中文导读";
 		}
 	}
 }
@@ -3117,7 +3133,7 @@ function showGuide(name, text, cached) {
 	const head = $(".tr-drawer-head");
 	const titleEl = $("#tr-drawer-title");
 	if (head) head.classList.remove("hidden");
-	if (titleEl) titleEl.textContent = `📖 中文导读 · ${name}`;
+	if (titleEl) titleEl.textContent = `中文导读 · ${name}`;
 	// pi-lens-ignore: no-inner-html-js
 	box.innerHTML = `
     <div class="guide-box">${renderAIBlock(text)}</div>
@@ -3199,7 +3215,7 @@ async function trendDigest() {
 	const head = $(".tr-drawer-head");
 	const titleEl = $("#tr-drawer-title");
 	if (head) head.classList.remove("hidden");
-	if (titleEl) titleEl.textContent = `📋 本期速览 · ${scopeLabel}`;
+	if (titleEl) titleEl.textContent = `本期速览 · ${scopeLabel}`;
 	// pi-lens-ignore: no-inner-html-js
 	box.innerHTML = `
     <div class="digest-body"><div class="hint">正在让 AI 通读榜单并总结…（约需十几秒）</div></div>`;
@@ -3248,7 +3264,7 @@ async function trendAdHoc() {
 		trend.adhocBusy = false;
 		if (go) {
 			go.disabled = false;
-			go.textContent = "📖 中文导读";
+			go.textContent = "中文导读";
 		}
 		toast("请填 owner/repo 或 GitHub 仓库链接", true);
 		return;
@@ -3263,7 +3279,7 @@ async function trendAdHoc() {
 		trend.adhocBusy = false;
 		if (go) {
 			go.disabled = false;
-			go.textContent = "📖 中文导读";
+			go.textContent = "中文导读";
 		}
 	}
 }
@@ -3457,7 +3473,7 @@ function bindTrendEvents() {
 function openBackup() {
 	const m = openModal(
 		`
-    <h3>📤 备份与恢复</h3>
+    <h3>备份与恢复</h3>
     <div class="field"><label>导出到（目录；留空使用设置中的常用备份目录）</label>
       <input type="text" id="bk-dest" value="${esc(config.backupDir || "")}" placeholder="如 E:\\ 或 D:\\NutstoreFiles">
     </div>
