@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.request import Request, urlopen
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, parse_qs, quote
 from html import unescape as html_unescape
 
@@ -2581,6 +2581,145 @@ def set_autostart(enable):
         return {"ok": False, "error": str(e)}
 
 
+# ---------------------------------------------------------------- 桌面快捷方式
+def desktop_dir():
+    """真实桌面目录：读注册表 Shell Folders，兼容 OneDrive 重定向的桌面。"""
+    if winreg is not None:
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+            ) as k:
+                val, _ = winreg.QueryValueEx(k, "Desktop")
+            val = os.path.expandvars(val)
+            if val and os.path.isdir(val):
+                return val
+        except OSError:
+            pass
+    return os.path.join(os.path.expanduser("~"), "Desktop")
+
+
+def _safe_filename(name, default="shortcut"):
+    """剔除 Windows 文件名非法字符与结尾的空格/点。"""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(name)).strip().rstrip(". ")
+    return name or default
+
+
+def create_lnk(lnk_path, target, args="", workdir="", desc="", icon_path=""):
+    """通过 WScript.Shell COM 写 .lnk（零第三方依赖）。
+    所有字段经 PowerShell 单引号转义后传入；返回 (ok, error)。"""
+    if sys.platform != "win32":
+        return False, "桌面快捷方式仅支持 Windows"
+    fields = [
+        ("TargetPath", target),
+        ("Arguments", args),
+        ("WorkingDirectory", workdir),
+        ("Description", desc),
+    ]
+    if icon_path and os.path.isfile(icon_path):
+        # IconLocation 形如 "C:\\path\\x.ico,0"；多尺寸 ICO 用索引 0
+        fields.append(("IconLocation", icon_path + ",0"))
+    assigns = "; ".join(f"$s.{key} = '{ps_quote(val)}'" for key, val in fields)
+    ps = (
+        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('"
+        + ps_quote(lnk_path)
+        + f"'); {assigns}; $s.Save()"
+    )
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if r.returncode != 0 or not os.path.isfile(lnk_path):
+        return False, (r.stderr or "快捷方式创建失败").strip()
+    return True, ""
+
+
+def _powershell_exe():
+    """系统自带 Windows PowerShell 5.1 的绝对路径（比依赖 PATH 确定）。"""
+    ps = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"),
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+    )
+    return ps if os.path.isfile(ps) else "powershell"
+
+
+SHORTCUT_ICON_DIR = os.path.join(BASE_DIR, "web", "icons", "shortcuts")
+# 启动入口类型 → 套装图标（scripts/build_icons.py 生成，多尺寸 ICO）
+_LAUNCHER_ICONS = {
+    "npm": "node.ico",
+    "python": "python.ico",
+    "bat": "cmd.ico",
+    "docker": "docker.ico",
+    "make": "make.ico",
+}
+
+
+def _shortcut_icon(name="generic.ico"):
+    """返回图标绝对路径；资源缺失时返回空串（lnk 将使用系统默认图标）。"""
+    p = os.path.join(SHORTCUT_ICON_DIR, name)
+    return p if os.path.isfile(p) else ""
+
+
+def create_project_shortcut(real_path, launcher):
+    """生成「桌面 .lnk + 数据目录 .ps1」：双击在新终端运行项目启动命令，离线可用。"""
+    cmd = launcher_cmd(launcher)
+    if not cmd:
+        return {"ok": False, "error": "无效的启动入口"}
+    proj_name = os.path.basename(real_path)
+    ldir = os.path.join(DATA_DIR, "launchers")
+    os.makedirs(ldir, exist_ok=True)
+    script_path = os.path.join(ldir, _safe_filename(proj_name) + ".ps1")
+    # utf-8-sig（带 BOM）让 PowerShell 5.1 正确识别脚本里的中文路径
+    with open(script_path, "w", encoding="utf-8-sig", newline="\r\n") as f:
+        f.write("# StarChart 自动生成的项目启动脚本（重新创建快捷方式即覆盖）\n")
+        f.write(f"# 项目：{proj_name}\n")
+        f.write(f"Set-Location -LiteralPath '{ps_quote(real_path)}'\n")
+        f.write(cmd + "\n")
+    lnk_name = _safe_filename(f"{proj_name} (星图)") + ".lnk"
+    lnk_path = os.path.join(desktop_dir(), lnk_name)
+    args = f'-NoExit -ExecutionPolicy Bypass -File "{script_path}"'
+    icon = _shortcut_icon(_LAUNCHER_ICONS.get(launcher.get("kind"), "generic.ico"))
+    ok, err = create_lnk(
+        lnk_path,
+        _powershell_exe(),
+        args=args,
+        workdir=real_path,
+        desc=f"{proj_name} · StarChart 项目启动",
+        icon_path=icon,
+    )
+    if not ok:
+        return {"ok": False, "error": err}
+    log(f"创建项目快捷方式：{lnk_path} -> {script_path}")
+    return {"ok": True, "file": lnk_name}
+
+
+def create_app_shortcut():
+    """桌面生成星图自身快捷方式：双击唤起托盘（未运行则启动并打开界面，已在跑则只开页面）。"""
+    pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    exe = pyw if os.path.isfile(pyw) else sys.executable
+    tray = os.path.join(BASE_DIR, "tray_app.py")
+    if not os.path.isfile(tray):
+        return {"ok": False, "error": f"未找到托盘入口：{tray}"}
+    lnk_path = os.path.join(desktop_dir(), "星图 StarChart.lnk")
+    ok, err = create_lnk(
+        lnk_path,
+        exe,
+        args=f'"{tray}"',
+        workdir=BASE_DIR,
+        desc="星图 StarChart · 本地项目导航",
+        icon_path=_shortcut_icon("starchart.ico"),
+    )
+    if not ok:
+        return {"ok": False, "error": err}
+    log(f"创建星图快捷方式：{lnk_path}")
+    return {"ok": True, "file": "星图 StarChart.lnk"}
+
+
 # ---------------------------------------------------------------- 日志尾部
 
 def read_log_tail(max_lines=200):
@@ -2775,6 +2914,12 @@ class Handler(BaseHTTPRequestHandler):
         ".ico": "image/x-icon",
     }
 
+    # 前端 History 路由白名单：直开/刷新/分享这些干净路径时回退 index.html，
+    # 由前端路由表 ROUTES 接管；不在白名单内的缺失路径仍返回 404。
+    SPA_ROUTES = re.compile(
+        r"^/(?:frequent|trend|settings|p/[A-Za-z0-9_-]+|frequent/p/[A-Za-z0-9_-]+)/?$"
+    )
+
     def _static(self, path):
         if path == "/":
             path = "/index.html"
@@ -2792,7 +2937,11 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return self._json({"ok": False, "error": "forbidden"}, 403)
         if not os.path.isfile(full):
-            return self._json({"ok": False, "error": "not found"}, 404)
+            # History 路由回退：仅白名单路径交给前端，避免把任意缺失都伪装成 200
+            if self.SPA_ROUTES.match(path):
+                full = os.path.join(WEB_DIR, "index.html")
+            else:
+                return self._json({"ok": False, "error": "not found"}, 404)
         ext = os.path.splitext(full)[1]
         # pi-lens-ignore: unchecked-throwing-call-python
         with open(full, "rb") as f:
@@ -2958,6 +3107,18 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     log(f"记录使用失败：{e}")
                 return self._json({"ok": True, "pid": proc.pid, "cmd": cmd})
+            if path == "/api/shortcut/create":
+                body = self._body_json()
+                if body.get("kind") == "app":
+                    return self._json(create_app_shortcut())
+                real = path_allowed(body.get("path", ""))
+                if not real:
+                    return self._json(
+                        {"ok": False, "error": "路径不在扫描根内或不存在"}
+                    )
+                return self._json(
+                    create_project_shortcut(real, body.get("launcher") or {})
+                )
             if path == "/api/stop":
                 body = self._body_json()
                 target = os.path.normpath(body.get("path", ""))
@@ -3101,6 +3262,25 @@ class Handler(BaseHTTPRequestHandler):
                             if not isinstance(e, dict):
                                 continue
                             eid = str(e.get("id") or "m%d" % (i + 1))
+                            ebase = str(e.get("baseUrl") or "").strip()
+                            emodel = str(e.get("model") or "").strip()
+                            # 早期校验：地址/模型名不合法时直接点名是哪一条，
+                            # 避免保存后才在别处报错、用户不知道改哪里
+                            if not ebase:
+                                save_config()
+                                return self._json(
+                                    {"ok": False, "error": "模型「%s」的 API 地址为空" % (e.get("name") or eid)}
+                                )
+                            if not ebase.startswith(("http://", "https://")):
+                                save_config()
+                                return self._json(
+                                    {"ok": False, "error": "模型「%s」的 API 地址需以 http:// 或 https:// 开头" % (e.get("name") or eid)}
+                                )
+                            if not emodel:
+                                save_config()
+                                return self._json(
+                                    {"ok": False, "error": "模型「%s」的模型名为空" % (e.get("name") or eid)}
+                                )
                             k = e.get("apiKey", "")
                             if k and k != MASK:
                                 k = encrypt_api_key(k)  # 新输入的明文 → 加密
@@ -3111,8 +3291,8 @@ class Handler(BaseHTTPRequestHandler):
                                 {
                                     "id": eid,
                                     "name": str(e.get("name") or "模型 %d" % (i + 1)),
-                                    "baseUrl": str(e.get("baseUrl") or ""),
-                                    "model": str(e.get("model") or ""),
+                                    "baseUrl": ebase,
+                                    "model": emodel,
                                     "apiKey": k,
                                 }
                             )
@@ -3153,13 +3333,13 @@ class Handler(BaseHTTPRequestHandler):
                     saved = (ent or {}).get("apiKey", "")
                     api["apiKey"] = api_key(dict(cfg, api={"apiKey": saved})) if saved else ""
                 if not (api.get("baseUrl") and api.get("model")):
-                    return self._json({"ok": False, "error": "请填写 baseUrl 和模型名"})
-                text = _test_api(api)
+                    return self._json({"ok": False, "error": "请填写 API 地址和模型名"})
+                text, err = _test_api(api)
                 return self._json(
                     {
                         "ok": bool(text),
                         "reply": text,
-                        "error": None if text else "请求失败，请检查地址/key/模型名",
+                        "error": err or "请求失败，请检查地址/key/模型名",
                     }
                 )
             if path == "/api/backup/export":
@@ -3177,7 +3357,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _test_api(api):
-    url = api["baseUrl"].rstrip("/") + "/chat/completions"
+    """试一条最小对话请求；成功返回 (回复文本, "")，失败返回 ("", 具体原因)。"""
+    base = api["baseUrl"].strip()
+    if not base.startswith(("http://", "https://")):
+        return "", "API 地址需以 http:// 或 https:// 开头"
+    url = base.rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api.get("apiKey"):
         headers["Authorization"] = "Bearer " + api["apiKey"]
@@ -3190,9 +3374,35 @@ def _test_api(api):
         req = Request(url, data=json.dumps(body).encode(), headers=headers)
         with urlopen(req, timeout=15) as resp:
             result = json.loads(resp.read().decode("utf-8"))
-        return result["choices"][0]["message"]["content"].strip()
-    except Exception:
-        return ""
+        msg = result["choices"][0]["message"]
+        # 推理型模型在小 max_tokens 下 content 可能为空（token 全花在 reasoning_content 上）；
+        # 只要响应结构合法就算连接成功，不能拿"没回话"误判为失败
+        text = (msg.get("content") or "").strip() or (msg.get("reasoning_content") or "").strip()
+        return (text or "OK"), ""
+    except HTTPError as e:
+        # 把厂商返回的错误体带出来（通常含 model / key 的具体原因）
+        detail = ""
+        try:
+            raw = e.read().decode("utf-8", "replace")[:200]
+            j = json.loads(raw)
+            detail = str((j.get("error") or {}).get("message") or j.get("message") or raw).strip()
+        except Exception:
+            pass
+        meaning = {401: "Key 无效或未填", 403: "无权限", 404: "地址或模型名不存在", 429: "请求过于频繁"}.get(
+            e.code, ""
+        )
+        msg = f"HTTP {e.code}" + (f"（{meaning}）" if meaning else "")
+        if detail:
+            msg += f"：{detail}"
+        return "", msg
+    except URLError as e:
+        if isinstance(e.reason, socket.timeout):
+            return "", "连接超时（15 秒），请检查网络或地址"
+        return "", f"无法连接：{e.reason}"
+    except socket.timeout:
+        return "", "读取超时（15 秒）"
+    except (KeyError, IndexError, ValueError):
+        return "", "响应格式不是 OpenAI 兼容（缺 choices 字段），请核对地址与模型名"
 
 
 def create_server():

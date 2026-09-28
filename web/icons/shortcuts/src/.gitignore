@@ -1,0 +1,2 @@
+# 图标构建中间产物（SVG → PNG → ICO 的 PNG 光栅化结果，可由 scripts/build_icons.py 重新生成）
+*.png

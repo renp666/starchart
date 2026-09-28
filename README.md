@@ -79,6 +79,9 @@ Note: the interface and the generated summaries are in Chinese.
 - **收藏 / 标签 / 备注**：★ 收藏、最多 10 个标签、500 字备注，全部可搜索，重扫不丢
 - **常用视图**：顶栏一键切换。真实打开 / 启动过的项目按使用频率排序，
   收藏置顶——解决"我最近在弄的那几个"永远最好找的问题
+- **干净地址路由**：地址栏是无后缀的整洁 URL（如 `/frequent`、`/p/<令牌>`），
+  切换视图 / 选中项目无刷新完成，刷新、前进 / 后退、复制链接直达都能正确还原界面状态；
+  旧版 `#path=` 深链首次访问自动迁移
 - **技术栈徽章**：扫描时自动推断主语言 / 框架（React / Python / Go…），树上直接可见
 - **查找文件**：详情面板内按文件名即时搜索项目内文件（跳过 node_modules 等），
   一键定位所在目录或复制完整路径
@@ -91,6 +94,10 @@ Note: the interface and the generated summaries are in Chinese.
 - **本地启动**：识别 npm / python / bat / docker compose / make 入口，
   新终端窗口启动并记录 PID，可一键停止；运行状态持久化，服务重启后自动恢复，
   之前启动的项目不会变成孤儿
+- **桌面快捷方式**：有命令行启动入口的项目可一键在桌面生成 `.lnk` 快捷方式
+  （右键菜单 / 详情面板均可创建），双击即可离线启动项目，无需打开星图；
+  星图自身也可在设置里创建桌面快捷方式，双击直接起服务 + 打开界面；
+  快捷方式按启动器类型自动匹配图标（node / python / docker / cmd / make / go 等）
 
 ### 跟得上
 
@@ -257,16 +264,19 @@ starchart\
 ├── stop.ps1           进程匹配与终止逻辑
 ├── make_icons.py      生成 favicon.ico / tray-64.png / icon-512.png
 ├── make_deluxe.py     生成 1024px 高清图标（AI 底图 + 精确线稿）
+├── scripts\
+│   └── build_icons.py 生成桌面快捷方式图标套装（SVG → 多尺寸 ICO）
 ├── requirements.txt   可选依赖：pypinyin、pystray
 └── web\
     ├── index.html     单页界面
-    ├── app.js         前端逻辑
+    ├── app.js         前端逻辑（含干净 URL 路由）
     ├── style.css      样式（暗 / 亮主题）
     ├── logo.svg       横版标识（顶栏 / README）
     ├── icon.svg       图形标（镂空描边）
     ├── favicon.ico    浏览器标签图标
     ├── tray-64.png    托盘图标
-    └── icon-512.png   大图（关于页 / README）
+    ├── icon-512.png   大图（关于页 / README）
+    └── icons\shortcuts\  快捷方式图标（starchart / node / python / go / docker / cmd / make / generic）
 ```
 
 ## 安全说明
@@ -274,7 +284,8 @@ starchart\
 - 服务只监听 `127.0.0.1`，不对外暴露
 - 所有请求校验 `Host` 头（只接受本机地址，阻断 DNS rebinding 攻击）；
   POST 接口额外校验 `Origin`，拒绝跨站请求
-- 静态文件服务三重防穿越：拒绝 `..` 与绝对路径 + `realpath` 前缀校验
+- 静态文件服务三重防穿越：拒绝 `..` 与绝对路径 + `realpath` 前缀校验；
+  干净路由地址（`/frequent`、`/p/*` 等）仅白名单正则命中才回退 `index.html`，其余仍 404
 - 启动入口参数走白名单，防止命令注入
 - 编辑器 / Agent 只能启动本机已探测到的程序，不接受请求传入的任意路径
 - API Key / GitHub Token 用 Windows DPAPI 加密后保存在 `config.json`

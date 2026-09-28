@@ -41,6 +41,7 @@ const TOOL_NAMES = {
 };
 let modalFocusReturn = null; // 弹窗关闭后焦点归还到此元素
 let modalDirty = false; // 设置弹窗有未保存修改
+let activeModalKind = null; // 当前弹窗类型："settings" | 其他（备份/排除等不入路由）
 let launchPollTimer = null; // 启动状态轮询定时器
 let searchTimer = null; // 搜索 debounce 定时器
 let openMoreMenu = null; // 当前打开的 ⋯ 菜单元素（配合 init 中的常驻 document 监听）
@@ -412,8 +413,6 @@ function renderNode(node, q, _isRoot, depth = 1) {
 	row.innerHTML = html;
 
 	row.addEventListener("click", (e) => {
-		selectedPath = node.path;
-		selectedNode = node;
 		if (hasKids) {
 			const willExpand = isCollapsed;
 			if (e.target.closest(".twisty") || willExpand) {
@@ -422,8 +421,7 @@ function renderNode(node, q, _isRoot, depth = 1) {
 				saveExpanded(expanded);
 			}
 		}
-		render();
-		renderDetail(node);
+		selectNode(node);
 		row.focus();
 	});
 	row.addEventListener("dblclick", () => openPath(node.path, "explorer"));
@@ -590,10 +588,7 @@ function renderFrequent() {
 			(n.intro ? `<span class="intro-line">${esc(n.intro)}</span>` : "") +
 			mark;
 		row.addEventListener("click", () => {
-			selectedPath = n.path;
-			selectedNode = n;
-			render();
-			renderDetail(n);
+			selectNode(n);
 		});
 		row.addEventListener("dblclick", () => openPath(n.path, "explorer"));
 		row.addEventListener("contextmenu", (e) => showRowMenu(e, n));
@@ -601,46 +596,200 @@ function renderFrequent() {
 	}
 }
 
-/* URL 深链：把当前选中/视图/搜索写进 location.hash，刷新或分享后按原状态恢复。
-   replaceState 只改地址、不入浏览历史，避免每次输入都塞满前进/后退。 */
-function syncHash() {
-	const parts = [];
-	if (selectedPath) parts.push("path=" + encodeURIComponent(selectedPath));
-	if (viewMode === "frequent") parts.push("view=frequent");
-	if (searchQuery.trim())
-		parts.push("q=" + encodeURIComponent(searchQuery.trim()));
-	const h = "#" + parts.join("&");
+/* ==================== 前端路由（History API，无刷新、无后缀） ====================
+ *
+ * 路由表 ROUTES 是唯一真源：新增模块只需加一条配置 + 在 applyResolved 里接线。
+ *
+ *   /                         树视图（默认）
+ *   /frequent                 常用
+ *   /trend                    趋势
+ *   /settings                 设置（覆盖层，背后视图状态保留）
+ *   /p/<token>                树视图 + 选中项目
+ *   /frequent/p/<token>       常用视图 + 选中项目
+ *   以上均可带 ?q=关键词       搜索词只 replace 进地址栏，不产生历史记录
+ *
+ * token = 项目绝对路径的 base64url 编码（短、无斜杠冒号等非法路径字符）。
+ * 模块切换 pushState（可前进/后退）；搜索输入只 replaceState，不污染历史。
+ * 服务端 _static 对这些路径统一回退 index.html，保证刷新/直开/分享不 404。 */
+
+const ROUTES = [
+	{ name: "tree", re: /^\/$/ },
+	{ name: "frequent", re: /^\/frequent\/?$/ },
+	{ name: "trend", re: /^\/trend\/?$/ },
+	{ name: "settings", re: /^\/settings\/?$/ },
+	{
+		name: "project",
+		re: /^\/(?:frequent\/)?p\/([A-Za-z0-9_-]+)\/?$/,
+	},
+];
+
+/* ---- 路径 token：UTF-8 → base64url（支持中文路径，所有主流浏览器原生 API） ---- */
+function tokenEncode(path) {
+	const bytes = new TextEncoder().encode(path);
+	let bin = "";
+	for (const b of bytes) bin += String.fromCharCode(b);
+	return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function tokenDecode(token) {
 	try {
-		if (location.hash !== h) history.replaceState(null, "", h);
+		const bin = atob(token.replace(/-/g, "+").replace(/_/g, "/"));
+		const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+		return new TextDecoder("utf-8").decode(bytes);
+	} catch (e) {
+		return null;
+	}
+}
+
+/* 解析当前地址栏 → 标准状态：{ name, view, projectPath, q }。
+ * 无法识别的地址回退树视图（由 applyResolved 决定是否 replace 修正 URL）。 */
+function resolveRoute(pathname, search) {
+	let route = null;
+	let m = null;
+	for (const r of ROUTES) {
+		const mm = pathname.match(r.re);
+		if (mm) {
+			route = r;
+			m = mm;
+			break;
+		}
+	}
+	const q = (() => {
+		try {
+			return new URLSearchParams(search || "").get("q") || "";
+		} catch (e) {
+			return "";
+		}
+	})();
+	if (!route) return { name: "unknown", view: "tree", projectPath: null, q };
+	if (route.name === "frequent")
+		return { name: "frequent", view: "frequent", projectPath: null, q };
+	if (route.name === "trend")
+		return { name: "trend", view: "trend", projectPath: null, q };
+	if (route.name === "settings")
+		return { name: "settings", view: viewMode, projectPath: selectedPath, q };
+	if (route.name === "project") {
+		const inFrequent = pathname.startsWith("/frequent");
+		return {
+			name: "project",
+			view: inFrequent ? "frequent" : "tree",
+			projectPath: tokenDecode(m[1]),
+			q,
+		};
+	}
+	return { name: "tree", view: "tree", projectPath: null, q };
+}
+
+/* 由内存状态构造主视图 URL（不含 settings 覆盖层）。 */
+function mainUrlFor(view, path, q) {
+	let u;
+	if (view === "frequent") u = path ? `/frequent/p/${tokenEncode(path)}` : "/frequent";
+	else u = path ? `/p/${tokenEncode(path)}` : "/";
+	if (q) u += "?q=" + encodeURIComponent(q);
+	return u;
+}
+
+let routeReady = false; // 首次 applyResolved 前不接管
+let settingsPushed = false; // /settings 是否由本页 push（决定关闭时 back 还是 replace）
+
+/* 统一导航：改地址栏（push 默认）→ 应用状态。同 URL 不重复入栈。 */
+function navigate(url, opts = {}) {
+	const cur = location.pathname + location.search;
+	if (url !== cur)
+		history[opts.replace ? "replaceState" : "pushState"](null, "", url);
+	applyResolved(resolveRoute(location.pathname, location.search), {
+		initial: false,
+	});
+}
+
+/* 路由 → 界面状态的唯一落地点。所有切换（点击/前进后退/首开/刷新）都走这里。 */
+function applyResolved(st, { initial = false } = {}) {
+	// settings 是覆盖层：进入则弹窗（背后视图原样保留），离开则关弹窗
+	if (st.name === "settings") {
+		settingsPushed = !initial;
+		if (!isSettingsModalOpen()) openSettingsModal();
+		return;
+	}
+	if (isSettingsModalOpen()) closeModalQuiet();
+
+	if (st.view === "trend") {
+		if (!isTrendOn()) enterTrend();
+		syncViewTabs();
+		return;
+	}
+
+	// 树 / 常用：还原视图、搜索词、选中项
+	if (isTrendOn()) exitTrend();
+	viewMode = st.view;
+	searchQuery = st.q || "";
+	const si = $("#search");
+	if (si) si.value = searchQuery;
+	const cb = $("#search-clear");
+	if (cb) cb.style.display = searchQuery ? "block" : "none";
+
+	selectedPath = st.projectPath;
+	selectedNode = st.projectPath ? findLocal(st.projectPath) : null;
+	$("#tree-panel").classList.remove("hidden");
+	if (selectedNode) {
+		$("#detail").classList.remove("hidden");
+		renderDetail(selectedNode);
+	} else {
+		$("#detail").classList.add("hidden");
+	}
+	render();
+	syncViewTabs();
+
+	// 地址打错/旧链接 token 失效：静默修正到树视图，避免界面与地址不一致
+	if (st.projectPath && !selectedNode) history.replaceState(null, "", "/");
+}
+
+/* 旧版 hash 深链（#path=..&view=frequent&q=..）首访一次性迁移到干净 URL */
+function migrateLegacyHash() {
+	const h = location.hash;
+	if (!h || !h.startsWith("#")) return null;
+	const p = new URLSearchParams(h.slice(1));
+	const path = p.get("path");
+	const view = p.get("view") === "frequent" ? "frequent" : "tree";
+	const q = p.get("q") || "";
+	if (!path && view === "tree" && !q) return "/";
+	const url = mainUrlFor(view, path, q);
+	history.replaceState(null, "", url);
+	return url;
+}
+
+/* 搜索词同步：只 replace 当前 URL 的 ?q=，绝不 push（打字不塞历史）。
+ * 与当前地址一致时不动，避免 render() 触发多余历史操作。 */
+function syncQuery() {
+	const q = searchQuery.trim();
+	const u = new URL(location.href);
+	if (q) u.searchParams.set("q", q);
+	else u.searchParams.delete("q");
+	const want = u.pathname + u.search;
+	const cur = location.pathname + location.search;
+	try {
+		if (want !== cur) history.replaceState(null, "", want);
 	} catch (e) {}
 }
 
-/* 从 URL hash 还原视图/搜索/选中。selectedNode 需在数据就绪后解析，这里只还原 raw 状态。 */
-function applyHash() {
-	try {
-		const h = location.hash.slice(1);
-		if (!h) return;
-		const p = new URLSearchParams(h);
-		const q = p.get("q");
-		if (q) {
-			searchQuery = q;
-			const si = $("#search");
-			if (si) si.value = q;
-			const cb = $("#search-clear");
-			if (cb) cb.style.display = "block";
-		}
-		if (p.get("view") === "frequent") viewMode = "frequent";
-		const path = p.get("path");
-		if (path) {
-			selectedPath = path;
-			selectedNode = null;
-		}
-	} catch (e) {}
+/* 选中节点（树行/搜索结果点击 = push；右键选中 = replace）。
+ * UI 统一由 applyResolved 落地，保证前进后退/首开走同一套渲染路径。 */
+function selectNode(node, mode = "push") {
+	const view = currentView() === "frequent" ? "frequent" : "tree";
+	navigate(mainUrlFor(view, node.path, searchQuery.trim()), {
+		replace: mode === "replace",
+	});
 }
+
+window.addEventListener("popstate", () => {
+	if (!routeReady) return;
+	applyResolved(resolveRoute(location.pathname, location.search), {
+		initial: false,
+	});
+});
+
 
 function render() {
 	renderTree();
-	syncHash();
+	syncQuery();
 	updateExcludedCount();
 }
 
@@ -1012,6 +1161,19 @@ function renderDetail(node) {
 	qa("▶ 终端", "打开系统终端并 cd 到项目目录", () =>
 		openPath(node.path, "terminal"),
 	);
+	// 桌面快捷方式：仅有命令行启动入口的项目显示；多个入口时弹层选择
+	if (node.type === "project" && launchers.length) {
+		qa("⇱ 桌面快捷方式", "在桌面创建快捷方式，双击即可离线启动该项目（无需打开星图）", (e) => {
+			if (launchers.length === 1) {
+				createProjectShortcut(node, launchers[0]);
+			} else {
+				showMenu(e.currentTarget, launchers.map((l) => ({
+					label: "⇱ " + l.label,
+					fn: () => createProjectShortcut(node, l),
+				})));
+			}
+		});
+	}
 	// 管理类：排除（项目）/ 标为项目（目录）——已有确认弹窗 + 撤销 toast 双防护
 	const mgBtn = document.createElement("button");
 	mgBtn.className = "mg-btn";
@@ -1260,11 +1422,8 @@ function closeRowMenu() {
 function showRowMenu(e, node) {
 	e.preventDefault();
 	e.stopPropagation();
-	// 与单击一致：先选中该节点并刷新详情
-	selectedPath = node.path;
-	selectedNode = node;
-	render();
-	renderDetail(node);
+	// 与单击一致：先选中该节点并刷新详情；右键不入浏览历史（replace）
+	selectNode(node, "replace");
 
 	closeRowMenu();
 	const menu = document.createElement("div");
@@ -1311,6 +1470,16 @@ function showRowMenu(e, node) {
 	);
 	add("▶ 终端", () => openPath(node.path, "terminal"), true);
 
+	if (node.type === "project" && node.launchers && node.launchers.length) {
+		// 多个启动入口时展开为多个菜单项，避免二级弹层定位
+		node.launchers.forEach((l) => {
+			const suffix = node.launchers.length > 1 ? ` · ${l.label}` : "";
+			add(`⇱ 创建桌面快捷方式${suffix}`, () =>
+				createProjectShortcut(node, l),
+			);
+		});
+	}
+
 	sep();
 	add("✎ 编辑介绍", () => editIntro(node));
 	add(node.starred ? "☆ 取消收藏" : "★ 收藏", () =>
@@ -1339,6 +1508,29 @@ function showRowMenu(e, node) {
 	menu.style.left = x + "px";
 	menu.style.top = y + "px";
 	menu.classList.remove("hidden");
+}
+
+/* ---- 桌面快捷方式 ---- */
+async function createProjectShortcut(node, launcher) {
+	try {
+		const r = await api("/api/shortcut/create", {
+			path: node.path,
+			launcher,
+		});
+		if (r.ok) toast(`已在桌面创建：${r.file}，双击即可启动`);
+		else toast(r.error || "创建失败", true);
+	} catch (e) {
+		toast(e.message, true);
+	}
+}
+async function createAppShortcut() {
+	try {
+		const r = await api("/api/shortcut/create", { kind: "app" });
+		if (r.ok) toast("已在桌面创建：星图 StarChart");
+		else toast(r.error || "创建失败", true);
+	} catch (e) {
+		toast(e.message, true);
+	}
 }
 
 /* ---- 启动与运行状态 ---- */
@@ -2020,6 +2212,7 @@ function onModalBackdropClick(e) {
 function openModal(html, returnFocus) {
 	modalFocusReturn = returnFocus || document.activeElement;
 	modalDirty = false;
+	if (activeModalKind !== "settings") activeModalKind = null; // 非设置弹窗不占路由
 	const root = $("#modal-root");
 	root.classList.remove("hidden");
 	// pi-lens-ignore: no-inner-html-js
@@ -2038,6 +2231,30 @@ function openModal(html, returnFocus) {
 	return modal;
 }
 function closeModal() {
+	const kind = activeModalKind;
+	teardownModal();
+	activeModalKind = null;
+	// 设置弹窗入了路由：关闭即退回背后视图（push 进来的走 back，首开直达的 replace）
+	if (kind === "settings" && location.pathname.startsWith("/settings")) {
+		if (settingsPushed) history.back();
+		else navigate("/", { replace: true });
+	}
+}
+
+/* 仅拆除弹窗 DOM（供路由 popstate 离开 /settings 时调用，不产生新的历史跳转） */
+function closeModalQuiet() {
+	teardownModal();
+	activeModalKind = null;
+}
+
+function isSettingsModalOpen() {
+	return (
+		activeModalKind === "settings" &&
+		!$("#modal-root").classList.contains("hidden")
+	);
+}
+
+function teardownModal() {
 	const root = $("#modal-root");
 	root.removeEventListener("keydown", onModalKeydown);
 	root.removeEventListener("click", onModalBackdropClick);
@@ -2063,7 +2280,14 @@ const MODEL_TEMPLATES = [
 	{ name: "自定义 OpenAI 兼容", baseUrl: "", model: "" },
 ];
 
+/* 齿轮按钮入口：进 /settings 路由（背后视图随历史保留），弹窗由 applyResolved 打开 */
 function openSettings() {
+	navigate("/settings");
+}
+
+/* 实际渲染设置弹窗（首开直达 /settings、前进恢复、按钮点击都汇聚到这里） */
+function openSettingsModal() {
+	activeModalKind = "settings";
 	const oldPort = config.port || 6173;
 	const settingRoots = [...(config.roots || [])];
 	// 保存前快照：用于保存后判断扫描范围（黑名单/根）是否变更，提示一键重扫
@@ -2161,6 +2385,11 @@ function openSettings() {
     </section>
     <section class="set-sec" id="sec-adv">
     <h4>其他设置</h4>
+    <div class="field"><label>桌面快捷方式</label>
+      <button id="set-app-shortcut" type="button" style="flex:0 0 auto">⇱ 在桌面创建「星图 StarChart」</button>
+      <div class="hint">双击桌面图标即可启动星图：未运行时后台启动并打开界面，已在运行则只打开页面。</div>
+    </div>
+    <hr>
     <div class="field" id="set-ghmirror-row"><label>
       <input type="checkbox" id="set-ghmirror-on"> 启用 GitHub 镜像 / 加速前缀
     </label>
@@ -2213,6 +2442,9 @@ function openSettings() {
 			if (dd.open) loadLog();
 		});
 	})();
+
+	// 创建星图自身桌面快捷方式（即时生效，不属于需保存的配置项）
+	m.querySelector("#set-app-shortcut").addEventListener("click", createAppShortcut);
 
 	// 标记脏数据（同步显示在 footer 的状态点）
 	const dirtyDot = m.querySelector("#set-dirty");
@@ -3319,30 +3551,30 @@ function resetTrendPanels() {
 	trendRailOpen();
 }
 
+/* 进入/离开趋势视图：只负责 DOM 与懒加载，URL/历史由路由层管 */
+function enterTrend() {
+	$("#tree-panel").classList.add("hidden");
+	$("#detail").classList.add("hidden");
+	$("#trend-view").classList.remove("hidden");
+	syncTrendUI();
+	bindTrendEvents();
+	trendLoad(false);
+}
+
+function exitTrend() {
+	$("#trend-view").classList.add("hidden");
+	resetTrendPanels();
+}
+
+/* 页签点击入口：统一走路由（push 历史），已在目标视图则不产生新记录 */
 function showMainView(v) {
 	if (v === "trend") {
-		if (!isTrendOn()) {
-			$("#tree-panel").classList.add("hidden");
-			$("#detail").classList.add("hidden");
-			$("#trend-view").classList.remove("hidden");
-			syncTrendUI();
-			bindTrendEvents();
-			trendLoad(false);
-		}
-	} else if (v === "tree" || v === "frequent") {
-		if (isTrendOn()) {
-			$("#trend-view").classList.add("hidden");
-			resetTrendPanels();
-		}
-		viewMode = v;
-		searchQuery = "";
-		$("#search").value = "";
-		$("#search-clear").style.display = "none";
-		$("#tree-panel").classList.remove("hidden");
-		if (selectedNode) $("#detail").classList.remove("hidden");
-		render();
+		if (isTrendOn())
+			navigate(mainUrlFor(viewMode, selectedPath)); // 再点趋势页签：收起回原视图
+		else navigate("/trend");
+		return;
 	}
-	syncViewTabs();
+	navigate(mainUrlFor(v, selectedPath));
 }
 
 function syncTrendUI() {
@@ -3591,8 +3823,9 @@ async function init() {
 		});
 	}
 
-	// 先还原 URL 深链状态（选中/视图/搜索），再加载数据渲染，让刷新后回到原状态
-	applyHash();
+	// 旧版 hash 深链（#path=..）先静默迁移成干净 URL，再统一按路由还原界面
+	migrateLegacyHash();
+	const initialRoute = resolveRoute(location.pathname, location.search);
 
 	// 首次加载连不上服务时，页面也能正常弹"断线重连"遮罩，而不是 init 中断导致整页无响应。
 	// 同样先探活，只有服务真不可达（残留旧标签页）才全屏遮罩。
@@ -3609,11 +3842,9 @@ async function init() {
 		throw e;
 	}
 
-	// 数据就绪后，把深链指向的路径解析成节点并打开详情
-	if (selectedPath) {
-		selectedNode = findLocal(selectedPath);
-		if (selectedNode) renderDetail(selectedNode);
-	}
+	// 数据就绪后按路由一次性还原视图/搜索/选中项目（/settings 在此弹窗）
+	applyResolved(initialRoute, { initial: true });
+	routeReady = true; // 此后浏览器前进/后退交 popstate 接管
 
 	// 系统主题切换时，"跟随系统"模式实时生效
 	const onSysTheme = () => {

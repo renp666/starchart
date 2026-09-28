@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#2d2d36"/>
+    <stop offset="0.55" stop-color="#1d1d24"/>
+    <stop offset="1" stop-color="#141419"/>
+  </linearGradient>
+  <radialGradient id="glow" cx="0.5" cy="-0.12" r="0.95">
+    <stop offset="0" stop-color="#8b7cf8" stop-opacity="0.42"/>
+    <stop offset="0.55" stop-color="#8b7cf8" stop-opacity="0.08"/>
+    <stop offset="1" stop-color="#8b7cf8" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#ffffff" stop-opacity="0.13"/>
+    <stop offset="0.6" stop-color="#ffffff" stop-opacity="0.02"/>
+    <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+  </linearGradient>
+  <clipPath id="clip"><rect x="8" y="8" width="240" height="240" rx="56"/></clipPath>
+</defs>
+<g clip-path="url(#clip)">
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <rect x="8" y="8" width="240" height="240" fill="url(#glow)"/>
+  <rect x="8" y="8" width="240" height="150" fill="url(#sheen)"/>
+</g>
+<!-- 无描边框：圆角外保持全透明，桌面底色自然透出 -->
+
+<rect x="58" y="78" width="140" height="100" rx="14" fill="none"
+      stroke="#f4f5ff" stroke-width="11"/>
+<polyline points="92,114 112,130 92,146" fill="none" stroke="#9a8cf8"
+      stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="120" y1="148" x2="158" y2="148" stroke="#f4f5ff"
+      stroke-width="12" stroke-linecap="round"/>
+</svg>
